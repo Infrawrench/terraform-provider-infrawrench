@@ -47,7 +47,13 @@ func (r *workflowScheduleResource) Schema(_ context.Context, _ resource.SchemaRe
 			"in a git-backed repository, and neither is written through this API surface — so this " +
 			"resource attaches a timetable to a workflow that already exists, addressed by id. Terraform " +
 			"owning the schedule but not the code is a deliberate split rather than an oversight: the " +
-			"schedule is operational configuration, and the code is code.",
+			"schedule is operational configuration, and the code is code.\n\n" +
+			"**Changing the schedule changes who the workflow runs as.** Scheduled and other " +
+			"automated runs act with the permissions of whoever last changed the workflow's code, " +
+			"trigger or assigned secrets, and the schedule is its trigger: once this resource creates " +
+			"or changes the cron, those runs act for the owner of the provider's API key. Re-applying " +
+			"an unchanged schedule does not. A workflow with secrets assigned also needs " +
+			"`secrets:read` on the key.",
 		Attributes: map[string]schema.Attribute{
 			"id": computedIDAttribute("The workflow id. A workflow has at most one schedule, so the two are the " +
 				"same identifier — `terraform import` takes the workflow id."),
@@ -105,7 +111,7 @@ func (r *workflowScheduleResource) Create(ctx context.Context, req resource.Crea
 // Read refreshes the schedule.
 //
 // A workflow whose trigger is no longer cron returns a null schedule, which
-// iw.Client.GetWorkflowSchedule reports as a 404 — so switching a workflow to a
+// iw.Client.GetWorkflowSchedule reports as a 404, so switching a workflow to a
 // manual trigger in the editor makes the next plan a create rather than an
 // update against something that is not there.
 func (r *workflowScheduleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -138,7 +144,7 @@ func (r *workflowScheduleResource) Update(ctx context.Context, req resource.Upda
 	r.write(ctx, plan, &resp.Diagnostics, &resp.State)
 }
 
-// Delete detaches the cron. The workflow survives — it simply stops firing on a
+// Delete detaches the cron. The workflow survives: it simply stops firing on a
 // timetable, which is what removing a schedule ought to mean.
 func (r *workflowScheduleResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state workflowScheduleResourceModel
@@ -178,7 +184,7 @@ func (r *workflowScheduleResource) write(ctx context.Context, plan workflowSched
 
 // workflowScheduleStateFrom maps a schedule into state.
 //
-// `nextRuns` — the preview of upcoming fire times — is deliberately dropped: it
+// `nextRuns` (the preview of upcoming fire times) is deliberately dropped: it
 // is recomputed at read time from the current clock, so putting it in state
 // would make every refresh a change.
 func workflowScheduleStateFrom(workflowID string, remote *iw.WorkflowSchedule) workflowScheduleResourceModel {

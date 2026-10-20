@@ -22,7 +22,7 @@ import (
 // Required, Optional nor Computed; a Computed attribute nested somewhere it
 // cannot be resolved; a Default on an attribute that is not Computed; a
 // duplicate type name. Every one of those compiles cleanly and fails only when
-// Terraform first talks to the provider — which, without this test, means it
+// Terraform first talks to the provider, which, without this test, means it
 // fails for a user rather than in CI.
 //
 // It needs no Terraform binary and no credentials, so unlike the acceptance
@@ -104,14 +104,14 @@ func TestEveryResourceCanBeImported(t *testing.T) {
 // as a promise the provider has no intention of keeping, and the failure lands
 // halfway through an apply that may already have created other resources.
 //
-// So this asserts the invariant rather than the individual fix — any numeric
+// So this asserts the invariant rather than the individual fix: any numeric
 // attribute whose description spells a range must carry a validator. It scans
 // the served gRPC schema, which is what Terraform actually sees.
 func TestDocumentedRangesAreValidated(t *testing.T) {
 	ctx := context.Background()
 	p := New("test")()
 
-	// "5–1440", "0–23", "1–100000" — an en dash or a hyphen between two
+	// "5–1440", "0–23", "1–100000": an en dash or a hyphen between two
 	// numbers, which is how every bounded attribute in this provider is
 	// written. Deliberately narrow: prose like "at most one every six hours"
 	// is not a bound on the attribute's value.
@@ -134,11 +134,13 @@ func TestDocumentedRangesAreValidated(t *testing.T) {
 				validated = len(a.Validators) > 0
 			case schema.ListAttribute:
 				validated = len(a.Validators) > 0
+			case schema.SetAttribute:
+				validated = len(a.Validators) > 0
 			case schema.StringAttribute:
 				validated = len(a.Validators) > 0
 			default:
-				// Bools, maps and sets carry no ranges worth bounding; a number
-				// in their description is prose.
+				// Bools and maps carry no ranges worth bounding; a number in
+				// their description is prose.
 				continue
 			}
 			if !validated {
@@ -172,7 +174,7 @@ func TestDocumentedRangesAreValidated(t *testing.T) {
 	if len(offenders) > 0 {
 		t.Errorf("these attributes document a range and do not enforce it:\n  %s\n\n"+
 			"Add a validator from validators.go — between, betweenFloat, elementsBetween, "+
-			"sizeBetween, sizeAtMost — or reword the description if the bound is not real. "+
+			"sizeBetween, sizeAtMost, setSizeAtMost — or reword the description if the bound is not real. "+
 			"An unenforced bound fails at apply, as an HTTP 400, after other resources "+
 			"in the graph have already been created.",
 			strings.Join(offenders, "\n  "))

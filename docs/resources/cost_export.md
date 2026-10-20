@@ -3,7 +3,8 @@
 page_title: "infrawrench_cost_export Resource - infrawrench"
 subcategory: ""
 description: |-
-  A scheduled delivery of cost rows to an S3-compatible bucket or an HTTP endpoint.
+  A scheduled delivery of cost rows to an S3-compatible bucket, an HTTP endpoint, or a table in a connected Snowflake or Databricks account.
+  A warehouse destination takes no credential of its own: the connected account's stored credentials load the rows, so access_key_id, secret_access_key and url stay unset and has_credentials is always true.
   Credentials are write-only. access_key_id, secret_access_key and url are accepted on write and never returned by any route — not by the create response, not by a read, not by the listing. Three things follow, and all three are permanent properties of the API rather than gaps this provider will close:
   The provider cannot detect drift on a credential. If someone rotates the stored secret through the UI, Terraform will not notice and will not plan a change. The only way to be certain of the stored value is to write it again.On update, a credential left out of the configuration is kept, not cleared. There is no way to express "remove the secret and leave the export"; delete and recreate the export instead.On import, credentials are unrecoverable — see the import notes below.
   has_credentials and credential_hint are the only readable signal that a secret exists at all.
@@ -12,7 +13,9 @@ description: |-
 
 # infrawrench_cost_export (Resource)
 
-A scheduled delivery of cost rows to an S3-compatible bucket or an HTTP endpoint.
+A scheduled delivery of cost rows to an S3-compatible bucket, an HTTP endpoint, or a table in a connected Snowflake or Databricks account.
+
+A `warehouse` destination takes no credential of its own: the connected account's stored credentials load the rows, so `access_key_id`, `secret_access_key` and `url` stay unset and `has_credentials` is always true.
 
 **Credentials are write-only.** `access_key_id`, `secret_access_key` and `url` are accepted on write and never returned by any route — not by the create response, not by a read, not by the listing. Three things follow, and all three are permanent properties of the API rather than gaps this provider will close:
 
@@ -32,7 +35,7 @@ Operational state — when the export last ran, whether it succeeded, how many r
 ### Required
 
 - `cadence` (String) How often the export runs: `daily`, `weekly` or `monthly`.
-- `format` (String) `csv` for a spreadsheet-and-warehouse friendly file, `ndjson` for one JSON object per line.
+- `format` (String) `csv` for a spreadsheet-and-warehouse friendly file, `ndjson` for one JSON object per line. Ignored by a `warehouse` destination, which loads typed columns; set `csv`.
 - `hour` (Number) Hour of the day the run starts, 0–23, interpreted in `timezone`.
 - `name` (String) Display name, 1–120 characters.
 - `restatement_days` (Number) How many days of already-exported history to re-emit on each run, 0–90. Providers restate recent spend after the fact, so a window here is what keeps a warehouse's copy in step with the invoice. Set it to 0 only if the consumer reconciles restatements itself.
@@ -46,8 +49,9 @@ Operational state — when the export last ran, whether it succeeded, how many r
 The two branches do not mix: the server's destination schema is a strict discriminated union, so the provider sends only the keys belonging to `kind` and an `endpoint` left over from an earlier `s3` configuration is not quietly forwarded on an `http` destination. Attributes belonging to the other branch are rejected rather than ignored. (see [below for nested schema](#nestedblock--destination))
 - `enabled` (Boolean) Whether the schedule runs. Disabling pauses delivery without discarding the stored credential.
 - `query` (Block, Optional) Which rows and columns the export emits. Required. (see [below for nested schema](#nestedblock--query))
+- `schema` (String) Which columns each object carries. `native` (the default) is Infrawrench's own layout, shaped by `query.dimensions` and `query.tag_keys`. `focus-1.4` and `focus-1.3` write the FinOps Open Cost and Usage Specification (FOCUS) columns of that version at the full row grain (1.4 drops the deprecated `ProviderName` and `PublisherName`; pick 1.3 only for a tool that cannot read 1.4), with `BilledCost` (cash) and `EffectiveCost` (amortized) side by side, the FOCUS charge and service categories, and all tags as one JSON `Tags` column. `query.dimensions`, `query.tag_keys` and `query.cost_basis` are ignored for it (set `dimensions = []`), while filters and `query.charge_types` still apply. Works with either `format`.
 - `secret_access_key` (String, Sensitive) Secret access key for an `s3` destination. Write-only, with the same consequences as `access_key_id`: no drift detection, and omission means keep.
-- `url` (String, Sensitive) Full webhook URL for an `http` destination, including any secret in its path or query. It travels as a top-level credential rather than inside the `destination` block precisely because it is secret material. Write-only: no drift detection, and omission means keep. Supplying a new one recomputes `destination.url_hint`.
+- `url` (String, Sensitive) Full webhook URL for an `http` destination, including any secret in its path or query. It must be `https`, carry no username or password, and not point at a private, loopback, link-local or otherwise reserved address; redirects are not followed. It travels as a top-level credential rather than inside the `destination` block precisely because it is secret material. Write-only: no drift detection, and omission means keep. Supplying a new one recomputes `destination.url_hint`.
 
 ### Read-Only
 
@@ -60,16 +64,19 @@ The two branches do not mix: the server's destination schema is a strict discrim
 
 Required:
 
-- `kind` (String) `s3` to write objects to an S3-compatible bucket, `http` to POST or PUT each file to a webhook.
+- `kind` (String) `s3` to write objects to an S3-compatible bucket, `http` to POST or PUT each file to a webhook, `warehouse` to load rows into a Snowflake or Databricks table.
 
 Optional:
 
+- `account_id` (String) Id of the connected Snowflake or Databricks account whose credentials load the rows, at most 128 characters; it must belong to `plugin_id`. `warehouse` only. Its role or principal needs the grants shown in the export's settings (`infrawrench exports setup` prints them).
 - `bucket` (String) Bucket name. `s3` only.
-- `endpoint` (String) Custom S3 endpoint for a non-AWS implementation such as R2, MinIO or Spaces. `s3` only; leave unset for AWS.
+- `endpoint` (String) Custom S3 endpoint for a non-AWS implementation such as R2, MinIO or Spaces: a bare host or an `https://` origin, with an optional port and no path. Plain `http` is refused, as is any host that is or resolves to a private, loopback, link-local or otherwise reserved address. `s3` only; leave unset for AWS.
 - `force_path_style` (Boolean) Address objects as `endpoint/bucket/key` rather than as a virtual host. Most self-hosted S3 implementations need this. `s3` only.
 - `method` (String) HTTP method each file is delivered with, `POST` or `PUT`. `http` only.
+- `plugin_id` (String) Which warehouse: `snowflake`, `databricks`. `warehouse` only.
 - `prefix` (String) Key prefix objects are written under. `s3` only.
-- `region` (String) Bucket region, e.g. `eu-west-2`. `s3` only.
+- `region` (String) Bucket region, e.g. `eu-west-2`; 1 to 32 lowercase letters, digits or hyphens. `s3` only.
+- `target` (Map of String) Where in the warehouse the rows land. Snowflake: `warehouse` (optional; the account's configured warehouse otherwise), `database`, `schema`, `table`. Databricks: `warehouseId` (the SQL warehouse id), `catalog`, `schema`, `table`. A table that does not exist is created on the first run; each run replaces, in one transaction, the rows matching this export's `export_id` and the periods it writes. Keys are letters, digits and underscores; values are 1 to 255 characters. `warehouse` only.
 
 Read-Only:
 
@@ -81,27 +88,28 @@ Read-Only:
 
 Required:
 
-- `dimensions` (List of String) Columns to group the exported rows by, in order, at most 8. Each is one of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`. More dimensions means more rows: this is the knob that decides whether the export is a summary or a ledger.
+- `dimensions` (List of String) Columns to group the exported rows by, in order, at most 8. Each is one of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`, `virtual_tag`. More dimensions means more rows: this is the knob that decides whether the export is a summary or a ledger.
 
 Optional:
 
 - `charge_types` (List of String) Restrict the export to these classes of charge, e.g. `usage`, `commitment_fee`, `credit`, `tax`. Leave unset to export every class.
-- `cost_basis` (String) `cash` to export invoiced spend, `amortized` to spread commitment fees across the term they cover.
+- `cost_basis` (String) `cash` to export invoiced spend, `amortized` to spread commitment fees across the term they cover, or `blended` to also share each commitment's discount evenly across all the usage it could cover, so every team or customer pays the same effective rate (day totals match amortized).
 - `filter` (Block List) Restricts the export to matching spend. Clauses are ANDed. At most 25. (see [below for nested schema](#nestedblock--query--filter))
 - `tag_keys` (List of String) Tag keys to emit as their own columns, at most 25. Only meaningful for keys your resources actually carry; see `infrawrench_tag_policy` for enforcing that.
+- `virtual_tag_keys` (List of String) Virtual tag keys to emit as their own `vtag_<key>` columns, at most 25, each 1-64 characters (see `infrawrench_virtual_tag`). A row a split rule divides is exported once per share with weighted amounts, so the file still sums to the total.
 
 <a id="nestedblock--query--filter"></a>
 ### Nested Schema for `query.filter`
 
 Required:
 
-- `dimension` (String) Cost dimension to filter on. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`.
-- `op` (String) `in` to keep matching rows, `not_in` to exclude them.
-- `values` (List of String) Values to match. Must not be empty.
+- `dimension` (String) Cost dimension to filter on. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`, `virtual_tag`.
+- `op` (String) How the dimension is compared with `values`. `in` keeps rows equal to a value and `not_in` excludes them. `flexible_match` compares after ignoring letter case, whitespace, `_` and `-`, so `Prod_Env` matches `prod-env`. `contains`, `not_contains` and `starts_with` are substring and prefix tests that ignore letter case. Each matches when any value does (`not_in` and `not_contains`: when none does). `is_set` and `is_not_set` test whether a `tag` or `virtual_tag` has a value at all. One of `in`, `not_in`, `flexible_match`, `contains`, `not_contains`, `starts_with`, `is_set`, `is_not_set`.
+- `values` (List of String) Values to compare with. At least one, except for `is_set` and `is_not_set`, which take an empty list (`values = []`). The text operators refuse an empty string.
 
 Optional:
 
-- `tag_key` (String) Tag key, required when `dimension` is `tag` and rejected otherwise.
+- `tag_key` (String) Tag key, required when `dimension` is `tag` (a provider tag key) or `virtual_tag` (a virtual tag key, see `infrawrench_virtual_tag`) and rejected otherwise.
 
 ## Import
 

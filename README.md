@@ -14,9 +14,10 @@
 > paths and do not exist in the mirror.
 
 Manages **Infrawrench's own configuration** as code: cost allocation and
-reporting, monitoring, lifecycle governance, connected accounts and access
-control, and alert delivery. 45 resources and 6 data sources, each with its own
-plan, its own drift detection and a real `terraform import`.
+reporting, monitoring, the service catalog, lifecycle governance, connected
+accounts and access control, and alert delivery. 77 resources and 8 data
+sources, each with its own plan, its own drift detection and a real
+`terraform import`.
 
 It does **not** manage your cloud resources. Those belong to your cloud's own
 provider, and getting them out of Infrawrench as HCL is what eject-to-Terraform
@@ -180,7 +181,7 @@ passing in silence.
 
 ## Install
 
-Requires Go 1.25 or newer to build. This module is deliberately **not** part of
+Requires Go 1.27.3 or newer to build. This module is deliberately **not** part of
 the pnpm workspace or the Turbo build graph — it is a standalone Go module with
 its own toolchain.
 
@@ -250,29 +251,32 @@ permissions.
 
 ### Scopes
 
-| Objects                                                                                                                                   | Read                        | Write                                                                      |
-| ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
-| Budgets                                                                                                                                   | `budgets:read`              | `budgets:write`                                                            |
-| Cost centres, allocation rules, saved filters, reports, folders, alerts, annotations, scenario models, business metrics, managed accounts | `costs:read`                | `costs:write`                                                              |
-| Tag policy                                                                                                                                | `resources:read`            | `org:settings:write`                                                       |
-| Billing rules, cost exports, report notifications, currency and exchange rates                                                            | `costs:read`                | `org:settings:write`                                                       |
-| Probes, status pages, sleep schedules, log queries                                                                                        | `resources:read`            | `resources:write`                                                          |
-| Metric alerts                                                                                                                             | `metric-alerts:read`        | `metric-alerts:write`                                                      |
-| Custom graphs                                                                                                                             | `dashboards:read`           | `dashboards:write`                                                         |
-| Network flow collection                                                                                                                   | `costs:read`                | `org:settings:write`                                                       |
-| Change freezes                                                                                                                            | `freezes:read`              | `freezes:write`                                                            |
-| Accounts                                                                                                                                  | `accounts:read`             | `accounts:write` (credentials: `secrets:write`; delete: `accounts:delete`) |
-| Bastions                                                                                                                                  | `bastions:read`             | `bastions:write`                                                           |
-| SSH keys, SSH snippets                                                                                                                    | `ssh-keys:read`             | `ssh-keys:write`                                                           |
-| API keys                                                                                                                                  | `apikeys:read`              | `apikeys:write`                                                            |
-| Roles                                                                                                                                     | `team:read`                 | `team:role:write`                                                          |
-| Deploy triggers                                                                                                                           | `deployments:read`          | `deployments:write`                                                        |
-| Workflow schedules                                                                                                                        | `workflows:read`            | `workflows:write`                                                          |
-| Session recording settings                                                                                                                | `session-recordings:read`   | `session-recordings:write`                                                 |
-| Jira / Linear connections                                                                                                                 | `jira:read` / `linear:read` | `jira:write` / `linear:write`                                              |
-| Alert routing, Slack channels, Teams webhooks, digest, drift / expiry / posture alert settings                                            | `org:settings:write`        | `org:settings:write`                                                       |
+| Objects                                                                                                                                             | Read                        | Write                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------- |
+| Budgets                                                                                                                                             | `budgets:read`              | `budgets:write`                                                            |
+| Cost centres, allocation rules, saved filters, reports, folders, canvases, alerts, annotations, scenario models, business metrics, managed accounts | `costs:read`                | `costs:write`                                                              |
+| Tag policy                                                                                                                                          | `resources:read`            | `org:settings:write`                                                       |
+| Billing rules, cost exports, report and canvas notifications, currency and exchange rates                                                           | `costs:read`                | `org:settings:write`                                                       |
+| Probes, SLOs, status pages, sleep schedules, log queries                                                                                            | `resources:read`            | `resources:write`                                                          |
+| Metric alerts                                                                                                                                       | `metric-alerts:read`        | `metric-alerts:write`                                                      |
+| Custom graphs                                                                                                                                       | `dashboards:read`           | `dashboards:write`                                                         |
+| Dashboard notifications                                                                                                                             | `dashboards:read`           | `org:settings:write`                                                       |
+| Network flow collection                                                                                                                             | `costs:read`                | `org:settings:write`                                                       |
+| Change freezes                                                                                                                                      | `freezes:read`              | `freezes:write`                                                            |
+| Accounts                                                                                                                                            | `accounts:read`             | `accounts:write` (credentials: `secrets:write`; delete: `accounts:delete`) |
+| Bastions                                                                                                                                            | `bastions:read`             | `bastions:write`                                                           |
+| SSH keys, SSH snippets                                                                                                                              | `ssh-keys:read`             | `ssh-keys:write`                                                           |
+| API keys                                                                                                                                            | `apikeys:read`              | `apikeys:write`                                                            |
+| Roles                                                                                                                                               | `team:read`                 | `team:role:write`                                                          |
+| Role default dashboards                                                                                                                             | `team:read`                 | `org:settings:write`                                                       |
+| Deploy triggers                                                                                                                                     | `deployments:read`          | `deployments:write`                                                        |
+| Workflow schedules                                                                                                                                  | `workflows:read`            | `workflows:write`                                                          |
+| Session recording settings                                                                                                                          | `session-recordings:read`   | `session-recordings:write`                                                 |
+| Jira / Linear connections                                                                                                                           | `jira:read` / `linear:read` | `jira:write` / `linear:write`                                              |
+| GitHub issue settings                                                                                                                               | `github-issues:read`        | `org:settings:write`                                                       |
+| Alert routing, Slack channels, Teams webhooks, digest, drift / expiry / posture alert settings                                                      | `org:settings:write`        | `org:settings:write`                                                       |
 
-Three shapes are worth noticing.
+Four shapes are worth noticing.
 
 - **Asymmetric pairs.** Billing rules, cost exports and report notifications read
   with `costs:read` but write with `org:settings:write`: a token holding only
@@ -285,6 +289,12 @@ Three shapes are worth noticing.
   routes because they are separate decisions, and the provider surfaces a
   failure on whichever half a token may not do rather than refusing the whole
   update.
+- **Three scopes cannot be put on a key at all.** `apikeys:read`,
+  `apikeys:write` and `team:role:write` are the permissions behind the two
+  resources in the deny-list above, and the Create API Key dialog does not offer
+  them: a key holding one would be refused anyway, so the checkbox would promise
+  something the server does not deliver. They are listed in the table because a
+  WorkOS access token does need them.
 
 ---
 
@@ -574,22 +584,47 @@ organization id — any value is accepted, since there is only ever one:
 
 ```sh
 terraform import infrawrench_tag_policy.this          org_01HXYZABCDEF
+terraform import infrawrench_tag_key_settings.this    org_01HXYZABCDEF
 terraform import infrawrench_alert_routing.org        org_01HXYZABCDEF
 terraform import infrawrench_currency_settings.this   org_01HXYZABCDEF
 terraform import infrawrench_jira_integration.this    org_01HXYZABCDEF
 ```
 
-The full list: `tag_policy`, `alert_routing`, `currency_settings`,
-`anomaly_settings`, `efficiency_alert_settings`, `drift_alert_settings`,
-`expiry_alert_settings`, `posture_alert_settings`,
-`session_recording_settings`, `network_flow_settings`, `digest_settings`, `jira_integration`,
-`linear_integration`.
+The full list: `tag_policy`, `tag_key_settings`, `alert_routing`, `currency_settings`,
+`anomaly_settings`, `efficiency_alert_settings`, `realized_savings_settings`, `seat_settings`,
+`drift_alert_settings`, `dora_settings`, `expiry_alert_settings`, `extended_support_settings`, `idle_finding_settings`, `posture_alert_settings`,
+`vulnerability_alert_settings`, `session_recording_settings`, `network_flow_settings`, `alert_email_settings`, `digest_settings`, `jira_integration`,
+`linear_integration`, `github_issue_settings`.
 
 **Report notifications** hang off a report, so the notification's own id cannot
 build a URL. They import under a composite address:
 
 ```sh
 terraform import infrawrench_cost_report_notification.weekly <report-id>/<notification-id>
+```
+
+**Report forecasts** are nested under their report the same way:
+
+```sh
+terraform import infrawrench_cost_forecast.plan <report-id>/<forecast-id>
+```
+
+**Report anomaly alerts** are one per report and import by the report's id:
+
+```sh
+terraform import infrawrench_cost_report_anomaly_alert.platform <report-id>
+```
+
+**Dashboard notifications** work the same way, nested under the dashboard:
+
+```sh
+terraform import infrawrench_dashboard_notification.weekly <dashboard-id>/<notification-id>
+```
+
+**Cost canvas notifications** likewise, nested under the canvas:
+
+```sh
+terraform import infrawrench_cost_canvas_notification.weekly <canvas-id>/<notification-id>
 ```
 
 **Workflow schedules** are addressed by the workflow they belong to:
@@ -613,6 +648,7 @@ stored one", leave it out.
 | `infrawrench_ssh_key`            | `private_key` — returned once      | `public_key`, `fingerprint`          |
 | `infrawrench_bastion`            | `token` — returned once            | `token_prefix`                       |
 | `infrawrench_msteams_webhook`    | `url`                              | `url_hint`                           |
+| `infrawrench_event_subscription` | `signing_secret`, returned once    | `secret_hint`                        |
 | `infrawrench_jira_integration`   | `api_token`                        | `token_hint`                         |
 | `infrawrench_linear_integration` | `api_key`                          | `key_hint`                           |
 | `infrawrench_deploy_trigger`     | `answers`                          | nothing                              |
@@ -637,70 +673,115 @@ secret store that consumes it rather than into an output.
 | --------------------------------------- | --------- | ---------------------------------------------------- |
 | `infrawrench_budget`                    | by id     | Live spend status is deliberately not exposed        |
 | `infrawrench_cost_centre`               | by id     | No single-GET route; read lists and filters          |
+| `infrawrench_custom_cost_source`        | by id     | Destroy deletes the source's uploaded spend          |
 | `infrawrench_allocation_rule`           | by id     | Lower priority wins; first match only                |
 | `infrawrench_tag_policy`                | by org id | Org singleton; destroy resets to unenforced          |
+| `infrawrench_tag_key_settings`          | by org id | Org singleton; destroy clears both lists             |
 | `infrawrench_saved_filter`              | by id     | `filter` and `query` are mutually exclusive          |
+| `infrawrench_savings_view`              | by id     | A saved view over the savings findings list          |
 | `infrawrench_cost_report`               | by id     |                                                      |
+| `infrawrench_resource_report`           | by id     | Columns are ids: `core:`, `field:`, `tag:`, `cost:`  |
 | `infrawrench_cost_report_folder`        | by id     | No single-GET route                                  |
 | `infrawrench_cost_report_notification`  | composite | `<report-id>/<notification-id>`; needs a destination |
+| `infrawrench_cost_forecast`             | composite | `<report-id>/<forecast-id>`; one default per report  |
+| `infrawrench_cost_report_anomaly_alert` | by report | One per report; import by the report's id            |
+| `infrawrench_dashboard_notification`    | composite | `<dashboard-id>/<notification-id>`; dashboard as PDF |
+| `infrawrench_cost_canvas`               | by id     | `spec_json` holds queries; compared as JSON          |
+| `infrawrench_cost_canvas_notification`  | composite | `<canvas-id>/<notification-id>`; canvas as PDF       |
 | `infrawrench_cost_alert`                | by id     | Needs at least one threshold                         |
 | `infrawrench_cost_annotation`           | by id     | An end equal to the start is stored as null          |
 | `infrawrench_scenario_model`            | by id     | Adjustment `key` is caller-assigned                  |
 | `infrawrench_billing_rule`              | by id     | Query-time restatement; `amount` is a major unit     |
+| `infrawrench_virtual_tag`               | by id     | Ordered rules, first match wins; `key` is immutable  |
 | `infrawrench_cost_export`               | by id     | Credentials are write-only and never imported        |
 | `infrawrench_business_metric`           | by id     | Definition only; values are a pushed time series     |
+| `infrawrench_business_metric_importer`  | by metric | Scheduled pull; destroy stops it, values stay        |
 | `infrawrench_managed_account`           | by id     | A centre or account belongs to at most one           |
+| `infrawrench_billing_profile`           | by id     | Drafts follow edits; approved invoices keep a copy   |
 | `infrawrench_currency_settings`         | by org id | Org singleton; destroy clears, rates survive         |
 | `infrawrench_exchange_rate`             | by id     | Upsert keyed on (from, to, effective_from)           |
 | `infrawrench_anomaly_settings`          | by org id | Org singleton; destroy restores the defaults         |
+| `infrawrench_anomaly_suppression`       | by id     | `starts_on` defaults to `anchor_day`; expiry kept    |
 | `infrawrench_efficiency_alert_settings` | by org id | Org singleton; destroy restores the defaults         |
+| `infrawrench_ai_request_source`         | by id     | LiteLLM `api_key` is write-only; lookback is clamped |
+| `infrawrench_ai_attribution_dimension`  | by id     | No single-GET route; becomes tag key `caller:<key>`  |
+| `infrawrench_realized_savings_settings` | by org id | Org singleton; destroy restores the defaults         |
+| `infrawrench_seat_settings`             | by org id | Org singleton; destroy restores the defaults         |
 
 ### Monitoring
 
-| Resource                   | Import | Notes                                                 |
-| -------------------------- | ------ | ----------------------------------------------------- |
-| `infrawrench_probe`        | by id  | Numeric fields are clamped server-side                |
-| `infrawrench_status_page`  | by id  | `slug` is minted with entropy; rotation is not a plan |
-| `infrawrench_metric_alert` | by id  | Selects resources by query, so it covers future ones  |
-| `infrawrench_log_query`    | by id  | One to eight streams; alerting is opt-in              |
-| `infrawrench_custom_graph` | by id  | `source` is TypeScript — use `file()`                 |
+| Resource                    | Import    | Notes                                                 |
+| --------------------------- | --------- | ----------------------------------------------------- |
+| `infrawrench_probe`         | by id     | Numeric fields are clamped server-side                |
+| `infrawrench_slo`           | by id     | Out-of-range target or threshold is rejected          |
+| `infrawrench_dora_settings` | by org id | Org singleton; destroy is a no-op                     |
+| `infrawrench_status_page`   | by id     | `slug` is minted with entropy; rotation is not a plan |
+| `infrawrench_metric_alert`  | by id     | Selects resources by query, so it covers future ones  |
+| `infrawrench_log_query`     | by id     | One to eight streams; alerting is opt-in              |
+| `infrawrench_custom_graph`  | by id     | `source` is TypeScript — use `file()`                 |
+
+### Service catalog
+
+| Resource                | Import        | Notes                                                      |
+| ----------------------- | ------------- | ---------------------------------------------------------- |
+| `infrawrench_service`   | by id or slug | Membership by rules; hand-picked members stay in the app   |
+| `infrawrench_scorecard` | by id         | Levels lowest first; check params are typed per check type |
 
 ### Lifecycle governance
 
-| Resource                                 | Import    | Notes                                                     |
-| ---------------------------------------- | --------- | --------------------------------------------------------- |
-| `infrawrench_schedule`                   | by id     | Resource and account are create-only                      |
-| `infrawrench_change_freeze`              | by id     | `starts_at` is Optional and Computed; ending is an action |
-| `infrawrench_drift_alert_settings`       | by org id | Org singleton; destroy is a no-op                         |
-| `infrawrench_expiry_alert_settings`      | by org id | Org singleton; destroy is a no-op                         |
-| `infrawrench_posture_alert_settings`     | by org id | Org singleton; destroy is a no-op                         |
-| `infrawrench_session_recording_settings` | by org id | Org singleton; destroy deliberately leaves it running     |
-| `infrawrench_network_flow_settings`      | by org id | Org singleton; destroy turns collection **off**           |
+| Resource                                   | Import                        | Notes                                                        |
+| ------------------------------------------ | ----------------------------- | ------------------------------------------------------------ |
+| `infrawrench_schedule`                     | by id                         | Resource and account are create-only                         |
+| `infrawrench_change_freeze`                | by id                         | `starts_at` is Optional and Computed; ending is an action    |
+| `infrawrench_drift_alert_settings`         | by org id                     | Org singleton; destroy is a no-op                            |
+| `infrawrench_expiry_alert_settings`        | by org id                     | Org singleton; destroy is a no-op                            |
+| `infrawrench_extended_support_settings`    | by org id                     | Org singleton; destroy is a no-op                            |
+| `infrawrench_idle_finding_settings`        | by org id                     | Org singleton; destroy is a no-op                            |
+| `infrawrench_posture_alert_settings`       | by org id                     | Org singleton; destroy is a no-op                            |
+| `infrawrench_vulnerability_alert_settings` | by org id                     | Org singleton; destroy is a no-op                            |
+| `infrawrench_compliance_control`           | `<framework_id>/<control_id>` | Destroy resets the control to applicable and unowned         |
+| `infrawrench_compliance_pack_schedule`     | by id                         | Scheduled evidence pack; at least one destination            |
+| `infrawrench_session_recording_settings`   | by org id                     | Org singleton; destroy deliberately leaves it running        |
+| `infrawrench_network_flow_settings`        | by org id                     | Org singleton; destroy turns collection **off**              |
+| `infrawrench_kubernetes_network_settings`  | by account id                 | One per Kubernetes account; destroy clears the billed source |
+| `infrawrench_kubernetes_efficiency_report` | by id                         | Files into cost report folders; figures computed at run time |
+| `infrawrench_network_flow_report`          | by id                         | Files into report folders; `date_preset` or dates            |
 
 ### Accounts and access
 
-| Resource                        | Import         | Notes                                                       |
-| ------------------------------- | -------------- | ----------------------------------------------------------- |
-| `infrawrench_account`           | by id          | Credentials are write-only; three permissions, three routes |
-| `infrawrench_bastion`           | by id          | Token returned once; renaming re-enrols                     |
-| `infrawrench_role`              | by id          | Built-in roles are refused rather than half-managed         |
-| `infrawrench_api_key`           | by id          | Every attribute replaces; delete is revoke                  |
-| `infrawrench_ssh_key`           | by id          | Import a public key, or generate and hold the private one   |
-| `infrawrench_ssh_snippet`       | by id          | Registers a command; does not run it                        |
-| `infrawrench_deploy_trigger`    | by id          | `enabled` is the only mutable field                         |
-| `infrawrench_workflow_schedule` | by workflow id | Attaches a cron to a workflow it does not own               |
+| Resource                             | Import                                  | Notes                                                                                            |
+| ------------------------------------ | --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| -----------------------------------  | ------------------------------------    | ------------------------------------------------------------------------------------------------ |
+| `infrawrench_account`                | by id                                   | Credentials are write-only; three permissions, three routes                                      |
+| `infrawrench_bastion`                | by id                                   | Token returned once; renaming re-enrols                                                          |
+| `infrawrench_role`                   | by id                                   | Built-in roles are refused rather than half-managed                                              |
+| `infrawrench_jit_access_policy`      | by id                                   | Policies only; requests and grants are runtime objects, closed to API keys                       |
+| `infrawrench_cost_visibility_scope`  | by `<principal_kind>/<principal_id>`    | Which costs a role, member or key sees; scopes intersect                                         |
+| `infrawrench_object_sharing`         | by `<object_type>/<object_id>`          | Authoritative sharing for a report, folder, canvas, savings view or dashboard; destroy resets it |
+| `infrawrench_role_default_dashboard` | by role id, or `owner`/`admin`/`member` | Where a role's members land; built-in roles too; open to API keys; destroy clears it             |
+| `infrawrench_api_key`                | by id                                   | Every attribute replaces; delete is revoke                                                       |
+| `infrawrench_ssh_key`                | by id                                   | Import a public key, or generate and hold the private one                                        |
+| `infrawrench_ssh_snippet`            | by id                                   | Registers a command; does not run it                                                             |
+| `infrawrench_deploy_trigger`         | by id                                   | `enabled` is the only mutable field                                                              |
+| `infrawrench_workflow_schedule`      | by workflow id                          | Attaches a cron to a workflow it does not own                                                    |
 
 ### Alert delivery
 
-| Resource                         | Import    | Notes                                                       |
-| -------------------------------- | --------- | ----------------------------------------------------------- |
-| `infrawrench_alert_routing`      | by org id | The whole ordered table; destroy restores the defaults      |
-| `infrawrench_slack_channel`      | by id     | The workspace connection is an OAuth flow, read not written |
-| `infrawrench_msteams_webhook`    | by id     | URL is write-only and Microsoft-host-restricted             |
-| `infrawrench_digest_settings`    | by org id | Org singleton; destinations come from the routing table     |
-| `infrawrench_digest_recipient`   | by id     | Address is normalized server-side                           |
-| `infrawrench_jira_integration`   | by org id | Org singleton; omitting the token keeps the stored one      |
-| `infrawrench_linear_integration` | by org id | Org singleton; omitting the key keeps the stored one        |
+| Resource                               | Import        | Notes                                                           |
+| -------------------------------------- | ------------- | --------------------------------------------------------------- |
+| `infrawrench_alert_routing`            | by org id     | The whole ordered table; destroy restores the defaults          |
+| `infrawrench_on_call_schedule`         | by id         | Rotation order is the list order; covers stay in the app        |
+| `infrawrench_slack_channel`            | by id         | The workspace connection is an OAuth flow, read not written     |
+| `infrawrench_msteams_webhook`          | by id         | URL is write-only and Microsoft-host-restricted                 |
+| `infrawrench_event_subscription`       | by id         | Signed webhook or EventBridge/Pub/Sub; `secret_version` rerolls |
+| `infrawrench_alert_email_settings`     | by org id     | Org singleton; destroy restores `member-domains`                |
+| `infrawrench_digest_settings`          | by org id     | Org singleton; destinations come from the routing table         |
+| `infrawrench_digest_recipient`         | by id         | Address is normalized server-side                               |
+| `infrawrench_paging_provider_settings` | by account id | Inbound mirroring; the webhook secret is write-only             |
+| `infrawrench_jira_integration`         | by org id     | Org singleton; omitting the token keeps the stored one          |
+| `infrawrench_linear_integration`       | by org id     | Org singleton; omitting the key keeps the stored one            |
+| `infrawrench_github_issue_settings`    | by org id     | Org singleton; destroy restores the defaults (filing off)       |
+| `infrawrench_pr_check_repository`      | by id         | One per repository; destroy turns its checks off                |
 
 ### Data sources
 
@@ -712,6 +793,8 @@ secret store that consumes it rather than into an output.
 | `infrawrench_resources`           | Resolve a synced resource id for a probe or schedule |
 | `infrawrench_permissions`         | The catalogue roles and API keys grant from          |
 | `infrawrench_slack_installations` | Resolve the workspace a channel belongs to           |
+| `infrawrench_members`             | Resolve member ids for alert email recipients        |
+| `infrawrench_service`             | One service by id or slug, with its member count     |
 
 ## Testing
 

@@ -3,15 +3,18 @@
 page_title: "infrawrench_budget Resource - infrawrench"
 subcategory: ""
 description: |-
-  A spend budget with alert thresholds.
-  Budgets carry live status (this month's actual and forecast spend) that this resource deliberately does not expose: it changes on every refresh and would make every plan noisy. Read it from the UI, the CLI, or the API.
+  A spend or usage budget with alert thresholds.
+  By default a budget limits monthly spend. Set measure = "usage" with usage_unit and usage_amount to limit a usage quantity (tokens, GB, requests) instead; add a recurring_period block for a custom cadence or explicit_period blocks for a list of periods with their own amounts; and set parent_budget_id to nest it under a parent, whose actual and forecast are then the sum of its children's.
+  Budgets carry live status (this period's actual and forecast) that this resource deliberately does not expose: it changes on every refresh and would make every plan noisy. Read it from the UI, the CLI, or the API.
 ---
 
 # infrawrench_budget (Resource)
 
-A spend budget with alert thresholds.
+A spend or usage budget with alert thresholds.
 
-Budgets carry live status (this month's actual and forecast spend) that this resource deliberately does not expose: it changes on every refresh and would make every plan noisy. Read it from the UI, the CLI, or the API.
+By default a budget limits monthly spend. Set `measure = "usage"` with `usage_unit` and `usage_amount` to limit a usage quantity (tokens, GB, requests) instead; add a `recurring_period` block for a custom cadence or `explicit_period` blocks for a list of periods with their own amounts; and set `parent_budget_id` to nest it under a parent, whose actual and forecast are then the sum of its children's.
+
+Budgets carry live status (this period's actual and forecast) that this resource deliberately does not expose: it changes on every refresh and would make every plan noisy. Read it from the UI, the CLI, or the API.
 
 ## Example Usage
 
@@ -43,6 +46,71 @@ resource "infrawrench_budget" "platform" {
     type    = "forecast"
     percent = 100
   }
+
+  # Emailed on top of whatever the alert routing rules decide. Member ids come
+  # from data.infrawrench_members; addresses must pass the external-address
+  # policy in infrawrench_alert_email_settings.
+  email_addresses = ["finance@example.com"]
+}
+
+# A child budget rolls up into the one above: the parent's actual and forecast
+# are the sum of its children's, measured over the parent's period.
+resource "infrawrench_budget" "platform_ci" {
+  name             = "Platform CI"
+  amount_cents     = 500000 # $5,000
+  parent_budget_id = infrawrench_budget.platform.id
+
+  filter {
+    dimension = "service"
+    op        = "in"
+    values    = ["CodeBuild"]
+  }
+
+  threshold {
+    type    = "actual"
+    percent = 100
+  }
+}
+
+# A usage budget on a two-week cadence: tokens instead of money.
+resource "infrawrench_budget" "llm_tokens" {
+  name         = "LLM tokens per sprint"
+  measure      = "usage"
+  usage_unit   = "tokens"
+  usage_amount = 250000000
+
+  recurring_period {
+    unit       = "week"
+    interval   = 2
+    start_date = "2026-10-05"
+  }
+
+  threshold {
+    type    = "forecast"
+    percent = 90
+  }
+}
+
+# An explicit list of periods, each with its own amount.
+resource "infrawrench_budget" "launch" {
+  name = "Launch quarter"
+
+  explicit_period {
+    start        = "2026-10-01"
+    end          = "2026-10-31"
+    amount_cents = 2000000
+  }
+
+  explicit_period {
+    start        = "2026-11-01"
+    end          = "2026-12-31"
+    amount_cents = 6000000
+  }
+
+  threshold {
+    type    = "actual"
+    percent = 80
+  }
 }
 ```
 
@@ -51,35 +119,71 @@ resource "infrawrench_budget" "platform" {
 
 ### Required
 
-- `amount_cents` (Number) Monthly budget in minor currency units. Must be greater than zero.
 - `name` (String) Display name, 1–120 characters.
 
 ### Optional
 
-- `cost_basis` (String) `cash` to measure against invoiced spend, `amortized` to spread commitment fees.
+- `amount_cents` (Number) Limit per period of a spend budget, in minor currency units. Must be greater than zero for a spend budget unless `explicit_period` blocks carry the amounts; ignored by a usage budget. Defaults to 0.
+- `cost_basis` (String) `cash` to measure against invoiced spend, `amortized` to spread commitment fees, or `blended` to also share each commitment's discount evenly across all the usage it could cover, so every team or customer pays the same effective rate (day totals match amortized).
 - `currency` (String) ISO 4217 currency code. Defaults to `USD`.
+- `email_addresses` (Set of String) Extra addresses to email when the budget crosses one of its thresholds: a `finance@` alias, or someone without a login. At most 20. Each must pass the organization's external-address policy (`infrawrench_alert_email_settings`), checked when saved and again when sent. Emailed **in addition to** whatever the organization's `infrawrench_alert_routing` rules decide, whether or not a rule matched, and never held by quiet hours.
+
+Optional and computed: leave it out and the list is managed elsewhere (removing it from configuration leaves the stored list unchanged); set `[]` to clear it.
+- `email_member_ids` (Set of String) Organization members to email when the budget crosses one of its thresholds, by user id from the `infrawrench_members` data source. At most 50. The member's current login address is read when the alert is sent, so an address change follows them and a member who leaves stops receiving. Emailed **in addition to** whatever the organization's `infrawrench_alert_routing` rules decide, whether or not a rule matched, and never held by quiet hours.
+
+Optional and computed: leave it out and the list is managed elsewhere (removing it from configuration leaves the stored list unchanged); set `[]` to clear it.
+- `explicit_period` (Block List) An explicit list of non-overlapping periods, each with its own amount (`amount_cents` for a spend budget, `usage_amount` for a usage budget). At most 60. Days outside every period are not measured. Conflicts with `recurring_period`. (see [below for nested schema](#nestedblock--explicit_period))
 - `filter` (Block List) Restricts the budget to matching spend. Clauses are ANDed. (see [below for nested schema](#nestedblock--filter))
+- `measure` (String) `cost` to limit spend (the default), `usage` to limit a usage quantity in `usage_unit`.
+- `parent_budget_id` (String) Id of the `infrawrench_budget` this one rolls up into. A parent's actual and forecast are the sum of its children's over the parent's period; parent and child must count the same thing (one currency, or one usage unit), and hierarchies are at most four levels deep.
+- `recurring_period` (Block, Optional) A custom cadence: periods of `interval` × `unit`, the first starting on `start_date`. Omit both this and `explicit_period` for the calendar month. Conflicts with `explicit_period`. (see [below for nested schema](#nestedblock--recurring_period))
 - `saved_filter_id` (String) Id of an `infrawrench_saved_filter` to apply on top of `filter`. Clearing this attribute clears it on the budget.
 - `scenario_model_id` (String) Id of an `infrawrench_scenario_model` whose adjustments feed the budget's forecast.
 - `threshold` (Block List) Alert thresholds. At least one and at most ten are required. (see [below for nested schema](#nestedblock--threshold))
+- `usage_amount` (Number) A usage budget's limit per period, in `usage_unit`: greater than zero and at most 10^15. Required for a usage budget unless `explicit_period` blocks carry the amounts.
+- `usage_unit` (String) The usage unit a usage budget counts, exactly as providers report it (the unit picker in the app lists the ones in your cost data), 1–64 characters. Required when `measure` is `usage`.
 - `use_adjusted_spend` (Boolean) Measure against spend restated by `infrawrench_billing_rule`s rather than raw spend.
 
 ### Read-Only
 
 - `id` (String) Server-assigned budget id. Use it with `terraform import`.
 
+<a id="nestedblock--explicit_period"></a>
+### Nested Schema for `explicit_period`
+
+Required:
+
+- `end` (String) Last day, `YYYY-MM-DD`, inclusive.
+- `start` (String) First day, `YYYY-MM-DD`, inclusive.
+
+Optional:
+
+- `amount_cents` (Number) This period's limit for a spend budget, in minor currency units; at least 1.
+- `usage_amount` (Number) This period's limit for a usage budget: greater than zero and at most 10^15.
+
+
 <a id="nestedblock--filter"></a>
 ### Nested Schema for `filter`
 
 Required:
 
-- `dimension` (String) Cost dimension to filter on. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`.
-- `op` (String) `in` to keep matching rows, `not_in` to exclude them.
-- `values` (List of String) Values to match. Must not be empty.
+- `dimension` (String) Cost dimension to filter on. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`, `virtual_tag`.
+- `op` (String) How the dimension is compared with `values`. `in` keeps rows equal to a value and `not_in` excludes them. `flexible_match` compares after ignoring letter case, whitespace, `_` and `-`, so `Prod_Env` matches `prod-env`. `contains`, `not_contains` and `starts_with` are substring and prefix tests that ignore letter case. Each matches when any value does (`not_in` and `not_contains`: when none does). `is_set` and `is_not_set` test whether a `tag` or `virtual_tag` has a value at all. One of `in`, `not_in`, `flexible_match`, `contains`, `not_contains`, `starts_with`, `is_set`, `is_not_set`.
+- `values` (List of String) Values to compare with. At least one, except for `is_set` and `is_not_set`, which take an empty list (`values = []`). The text operators refuse an empty string.
 
 Optional:
 
-- `tag_key` (String) Tag key, required when `dimension` is `tag` and rejected otherwise.
+- `tag_key` (String) Tag key, required when `dimension` is `tag` (a provider tag key) or `virtual_tag` (a virtual tag key, see `infrawrench_virtual_tag`) and rejected otherwise.
+
+
+<a id="nestedblock--recurring_period"></a>
+### Nested Schema for `recurring_period`
+
+Optional:
+
+- `interval` (Number) How many units each period lasts, 1–365. Required in the block.
+- `start_date` (String) First day of the first period, `YYYY-MM-DD` (UTC). Required in the block.
+- `unit` (String) One of `day`, `week`, `month`, `quarter`, `year`. Required in the block.
 
 
 <a id="nestedblock--threshold"></a>

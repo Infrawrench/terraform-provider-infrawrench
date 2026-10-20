@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/mapvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/objectvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -14,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -27,6 +30,22 @@ var (
 	_ resource.ResourceWithConfigure   = (*costExportResource)(nil)
 	_ resource.ResourceWithImportState = (*costExportResource)(nil)
 )
+
+// costExportRegionPattern mirrors the server's region check: the region becomes
+// a hostname label, so it is held to the characters a real region uses.
+var costExportRegionPattern = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
+
+// costExportEndpointPattern is a first-pass check of the server's endpoint rule:
+// a bare host or an https:// origin with an optional port, no credentials, no
+// path. The server additionally refuses private and reserved addresses.
+var costExportEndpointPattern = regexp.MustCompile(`^(https://)?[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$`)
+
+// costExportTargetKeyPattern mirrors the server's rule for warehouse target
+// field names: a letter, then letters, digits or underscores, 64 at most.
+var costExportTargetKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
+
+// costExportWarehousePlugins are the plugins that declare a warehouse sink.
+var costExportWarehousePlugins = []string{"snowflake", "databricks"}
 
 // costExportQueryVersion is the query document version this provider writes.
 //
@@ -43,19 +62,21 @@ func NewCostExportResource() resource.Resource { return &costExportResource{} }
 type costExportResource struct{ client *iw.Client }
 
 type costExportQueryModel struct {
-	Dimensions  types.List   `tfsdk:"dimensions"`
-	TagKeys     types.List   `tfsdk:"tag_keys"`
-	ChargeTypes types.List   `tfsdk:"charge_types"`
-	CostBasis   types.String `tfsdk:"cost_basis"`
-	Filter      types.List   `tfsdk:"filter"`
+	Dimensions     types.List   `tfsdk:"dimensions"`
+	TagKeys        types.List   `tfsdk:"tag_keys"`
+	VirtualTagKeys types.List   `tfsdk:"virtual_tag_keys"`
+	ChargeTypes    types.List   `tfsdk:"charge_types"`
+	CostBasis      types.String `tfsdk:"cost_basis"`
+	Filter         types.List   `tfsdk:"filter"`
 }
 
 var costExportQueryAttrTypes = map[string]attr.Type{
-	"dimensions":   types.ListType{ElemType: types.StringType},
-	"tag_keys":     types.ListType{ElemType: types.StringType},
-	"charge_types": types.ListType{ElemType: types.StringType},
-	"cost_basis":   types.StringType,
-	"filter":       types.ListType{ElemType: costFilterObjectType},
+	"dimensions":       types.ListType{ElemType: types.StringType},
+	"tag_keys":         types.ListType{ElemType: types.StringType},
+	"virtual_tag_keys": types.ListType{ElemType: types.StringType},
+	"charge_types":     types.ListType{ElemType: types.StringType},
+	"cost_basis":       types.StringType,
+	"filter":           types.ListType{ElemType: costFilterObjectType},
 }
 
 type costExportDestinationModel struct {
@@ -67,6 +88,9 @@ type costExportDestinationModel struct {
 	ForcePathStyle types.Bool   `tfsdk:"force_path_style"`
 	Method         types.String `tfsdk:"method"`
 	URLHint        types.String `tfsdk:"url_hint"`
+	PluginID       types.String `tfsdk:"plugin_id"`
+	AccountID      types.String `tfsdk:"account_id"`
+	Target         types.Map    `tfsdk:"target"`
 }
 
 var costExportDestinationAttrTypes = map[string]attr.Type{
@@ -78,12 +102,16 @@ var costExportDestinationAttrTypes = map[string]attr.Type{
 	"force_path_style": types.BoolType,
 	"method":           types.StringType,
 	"url_hint":         types.StringType,
+	"plugin_id":        types.StringType,
+	"account_id":       types.StringType,
+	"target":           types.MapType{ElemType: types.StringType},
 }
 
 type costExportResourceModel struct {
 	ID              types.String `tfsdk:"id"`
 	Name            types.String `tfsdk:"name"`
 	Format          types.String `tfsdk:"format"`
+	Schema          types.String `tfsdk:"schema"`
 	Cadence         types.String `tfsdk:"cadence"`
 	Hour            types.Int64  `tfsdk:"hour"`
 	Timezone        types.String `tfsdk:"timezone"`
@@ -106,8 +134,11 @@ func (r *costExportResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "A scheduled delivery of cost rows to an S3-compatible bucket or an HTTP " +
-			"endpoint.\n\n" +
+		MarkdownDescription: "A scheduled delivery of cost rows to an S3-compatible bucket, an HTTP " +
+			"endpoint, or a table in a connected Snowflake or Databricks account.\n\n" +
+			"A `warehouse` destination takes no credential of its own: the connected account's " +
+			"stored credentials load the rows, so `access_key_id`, `secret_access_key` and `url` " +
+			"stay unset and `has_credentials` is always true.\n\n" +
 			"**Credentials are write-only.** `access_key_id`, `secret_access_key` and `url` are " +
 			"accepted on write and never returned by any route — not by the create response, not " +
 			"by a read, not by the listing. Three things follow, and all three are permanent " +
@@ -139,8 +170,24 @@ func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"format": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "`csv` for a spreadsheet-and-warehouse friendly file, `ndjson` for " +
-					"one JSON object per line.",
+					"one JSON object per line. Ignored by a `warehouse` destination, which loads typed " +
+					"columns; set `csv`.",
 				Validators: []validator.String{oneOfValidator("csv", "ndjson")},
+			},
+			"schema": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString("native"),
+				MarkdownDescription: "Which columns each object carries. `native` (the default) is " +
+					"Infrawrench's own layout, shaped by `query.dimensions` and `query.tag_keys`. " +
+					"`focus-1.4` and `focus-1.3` write the FinOps Open Cost and Usage Specification " +
+					"(FOCUS) columns of that version at the full row grain (1.4 drops the deprecated " +
+					"`ProviderName` and `PublisherName`; pick 1.3 only for a tool that cannot read 1.4), with `BilledCost` (cash) and `EffectiveCost` " +
+					"(amortized) side by side, the FOCUS charge and service categories, and all tags " +
+					"as one JSON `Tags` column. `query.dimensions`, `query.tag_keys` and " +
+					"`query.cost_basis` are ignored for it (set `dimensions = []`), while filters and " +
+					"`query.charge_types` still apply. Works with either `format`.",
+				Validators: []validator.String{oneOfValidator("native", "focus-1.4", "focus-1.3")},
 			},
 			"cadence": schema.StringAttribute{
 				Required:            true,
@@ -191,7 +238,9 @@ func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Optional:  true,
 				Sensitive: true,
 				MarkdownDescription: "Full webhook URL for an `http` destination, including any secret in " +
-					"its path or query. It travels as a top-level credential rather than inside the " +
+					"its path or query. It must be `https`, carry no username or password, and not point " +
+					"at a private, loopback, link-local or otherwise reserved address; redirects are not " +
+					"followed. It travels as a top-level credential rather than inside the " +
 					"`destination` block precisely because it is secret material. Write-only: no " +
 					"drift detection, and omission means keep. Supplying a new one recomputes " +
 					"`destination.url_hint`.",
@@ -231,6 +280,18 @@ func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 							"`infrawrench_tag_policy` for enforcing that.",
 						Validators: []validator.List{listvalidator.SizeAtMost(25)},
 					},
+					"virtual_tag_keys": schema.ListAttribute{
+						Optional:    true,
+						ElementType: types.StringType,
+						MarkdownDescription: "Virtual tag keys to emit as their own `vtag_<key>` columns, at " +
+							"most 25, each 1-64 characters (see `infrawrench_virtual_tag`). A row a " +
+							"split rule divides is exported once per share with weighted amounts, so the " +
+							"file still sums to the total.",
+						Validators: []validator.List{
+							listvalidator.SizeAtMost(25),
+							listvalidator.ValueStringsAre(stringvalidator.LengthBetween(1, 64)),
+						},
+					},
 					"charge_types": schema.ListAttribute{
 						Optional:    true,
 						ElementType: types.StringType,
@@ -240,8 +301,8 @@ func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					"cost_basis": schema.StringAttribute{
 						Optional: true,
 						MarkdownDescription: "`cash` to export invoiced spend, `amortized` to spread " +
-							"commitment fees across the term they cover.",
-						Validators: []validator.String{oneOfValidator("cash", "amortized")},
+							"commitment fees across the term they cover, " + blendedBasisDescription,
+						Validators: []validator.String{oneOfValidator("cash", "amortized", "blended")},
 					},
 				},
 				Blocks: map[string]schema.Block{
@@ -260,8 +321,39 @@ func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					"kind": schema.StringAttribute{
 						Required: true,
 						MarkdownDescription: "`s3` to write objects to an S3-compatible bucket, `http` to " +
-							"POST or PUT each file to a webhook.",
-						Validators: []validator.String{oneOfValidator("s3", "http")},
+							"POST or PUT each file to a webhook, `warehouse` to load rows into a " +
+							"Snowflake or Databricks table.",
+						Validators: []validator.String{oneOfValidator("s3", "http", "warehouse")},
+					},
+					"plugin_id": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "Which warehouse: `" + joinBackticked(costExportWarehousePlugins) +
+							"`. `warehouse` only.",
+						Validators: []validator.String{oneOfValidator(costExportWarehousePlugins...)},
+					},
+					"account_id": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "Id of the connected Snowflake or Databricks account whose " +
+							"credentials load the rows, at most 128 characters; it must belong to " +
+							"`plugin_id`. `warehouse` only. Its role or principal needs the grants shown " +
+							"in the export's settings (`infrawrench exports setup` prints them).",
+						Validators: []validator.String{stringvalidator.LengthBetween(1, 128)},
+					},
+					"target": schema.MapAttribute{
+						Optional:    true,
+						ElementType: types.StringType,
+						MarkdownDescription: "Where in the warehouse the rows land. Snowflake: `warehouse` " +
+							"(optional; the account's configured warehouse otherwise), `database`, " +
+							"`schema`, `table`. Databricks: `warehouseId` (the SQL warehouse id), " +
+							"`catalog`, `schema`, `table`. A table that does not exist is created on the " +
+							"first run; each run replaces, in one transaction, the rows matching this " +
+							"export's `export_id` and the periods it writes. Keys are letters, digits " +
+							"and underscores; values are 1 to 255 characters. `warehouse` only.",
+						Validators: []validator.Map{
+							mapvalidator.KeysAre(stringvalidator.RegexMatches(costExportTargetKeyPattern,
+								"must start with a letter and contain only letters, digits or underscores")),
+							mapvalidator.ValueStringsAre(stringvalidator.LengthBetween(1, 255)),
+						},
 					},
 					"bucket": schema.StringAttribute{
 						Optional:            true,
@@ -272,13 +364,25 @@ func (r *costExportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						MarkdownDescription: "Key prefix objects are written under. `s3` only.",
 					},
 					"region": schema.StringAttribute{
-						Optional:            true,
-						MarkdownDescription: "Bucket region, e.g. `eu-west-2`. `s3` only.",
+						Optional: true,
+						MarkdownDescription: "Bucket region, e.g. `eu-west-2`; 1 to 32 lowercase letters, " +
+							"digits or hyphens. `s3` only.",
+						Validators: []validator.String{
+							stringvalidator.RegexMatches(costExportRegionPattern,
+								"must be 1 to 32 lowercase letters, digits or hyphens"),
+						},
 					},
 					"endpoint": schema.StringAttribute{
 						Optional: true,
 						MarkdownDescription: "Custom S3 endpoint for a non-AWS implementation such as R2, " +
-							"MinIO or Spaces. `s3` only; leave unset for AWS.",
+							"MinIO or Spaces: a bare host or an `https://` origin, with an optional port " +
+							"and no path. Plain `http` is refused, as is any host that is or resolves to a " +
+							"private, loopback, link-local or otherwise reserved address. `s3` only; leave " +
+							"unset for AWS.",
+						Validators: []validator.String{
+							stringvalidator.RegexMatches(costExportEndpointPattern,
+								"must be a host or an https:// origin, with an optional port and no path"),
+						},
 					},
 					"force_path_style": schema.BoolAttribute{
 						Optional: true,
@@ -424,7 +528,7 @@ func (r *costExportResource) Delete(ctx context.Context, req resource.DeleteRequ
 	}
 }
 
-// ImportState takes the export id and reads everything the API will give back —
+// ImportState takes the export id and reads everything the API will give back,
 // which does not include the credential.
 //
 // An imported export therefore lands in state with `access_key_id`,
@@ -433,7 +537,7 @@ func (r *costExportResource) Delete(ctx context.Context, req resource.DeleteRequ
 // they could be reconstructed from. The practitioner must put the real values
 // back into the configuration after importing; the first apply then writes them
 // through. Until that happens the plan will show the credentials being added,
-// which is accurate — Terraform genuinely does not know them.
+// which is accurate: Terraform genuinely does not know them.
 //
 // `has_credentials` and `credential_hint` do import correctly, so they are the
 // way to confirm which key the export is currently delivering with.
@@ -461,6 +565,8 @@ func costExportInputFrom(ctx context.Context, model costExportResourceModel) (iw
 		diags.Append(d...)
 		tagKeys, d := stringSlice(ctx, q.TagKeys)
 		diags.Append(d...)
+		virtualTagKeys, d := stringSlice(ctx, q.VirtualTagKeys)
+		diags.Append(d...)
 		chargeTypes, d := stringSlice(ctx, q.ChargeTypes)
 		diags.Append(d...)
 		filters, d := costFiltersFrom(ctx, q.Filter)
@@ -471,6 +577,7 @@ func costExportInputFrom(ctx context.Context, model costExportResourceModel) (iw
 
 		query.Dimensions = dimensions
 		query.TagKeys = tagKeys
+		query.VirtualTagKeys = virtualTagKeys
 		query.ChargeTypes = chargeTypes
 		query.Filters = filters
 		query.CostBasis = stringPtr(q.CostBasis)
@@ -490,7 +597,7 @@ func costExportInputFrom(ctx context.Context, model costExportResourceModel) (iw
 		// MarshalJSON emits only the ones belonging to Kind: the server's schema
 		// is a strict discriminated union and a stray key from the other branch is
 		// a 400, not a field it ignores. The http branch's URL is not part of this
-		// struct at all — it is secret material and travels as a top-level
+		// struct at all: it is secret material and travels as a top-level
 		// write-only credential below.
 		destination = iw.CostExportDestination{
 			Kind:           dest.Kind.ValueString(),
@@ -500,12 +607,23 @@ func costExportInputFrom(ctx context.Context, model costExportResourceModel) (iw
 			Endpoint:       stringPtr(dest.Endpoint),
 			ForcePathStyle: boolPtr(dest.ForcePathStyle),
 			Method:         stringPtr(dest.Method),
+			PluginID:       stringPtr(dest.PluginID),
+			AccountID:      stringPtr(dest.AccountID),
+		}
+		if !dest.Target.IsNull() && !dest.Target.IsUnknown() {
+			target := map[string]string{}
+			diags.Append(dest.Target.ElementsAs(ctx, &target, false)...)
+			if diags.HasError() {
+				return iw.CostExportInput{}, diags
+			}
+			destination.Target = target
 		}
 	}
 
 	return iw.CostExportInput{
 		Name:            model.Name.ValueString(),
 		Format:          model.Format.ValueString(),
+		Schema:          model.Schema.ValueString(),
 		Query:           query,
 		Cadence:         model.Cadence.ValueString(),
 		Hour:            model.Hour.ValueInt64(),
@@ -516,7 +634,7 @@ func costExportInputFrom(ctx context.Context, model costExportResourceModel) (iw
 
 		// The three write-only credentials. stringPtr yields nil for a null or
 		// unknown attribute, and the corresponding wire fields are omitempty
-		// pointers, so an omitted credential is an omitted JSON key — which the
+		// pointers, so an omitted credential is an omitted JSON key, which the
 		// server reads as "keep the stored one". That is exactly the semantics we
 		// want and it needs no special casing: a practitioner who supplies the
 		// secret through a variable in CI and leaves it out locally does not blank
@@ -540,8 +658,8 @@ func costExportInputFrom(ctx context.Context, model costExportResourceModel) (iw
 // never plan a change for it. `has_credentials` and `credential_hint` do come
 // from the server and are the only signal that anything is stored.
 //
-// Operational fields on the response — lastRunAt, lastStatus, lastError,
-// lastObjectCount, lastRowCount, nextRunAt — are read and discarded. They change
+// Operational fields on the response (lastRunAt, lastStatus, lastError,
+// lastObjectCount, lastRowCount, nextRunAt) are read and discarded. They change
 // on every refresh and belong in the UI, not in a plan diff, the same way budget
 // spend status is left off `infrawrench_budget`.
 func costExportStateFrom(ctx context.Context, remote *iw.CostExport, prior costExportResourceModel) (costExportResourceModel, diag.Diagnostics) {
@@ -554,6 +672,8 @@ func costExportStateFrom(ctx context.Context, remote *iw.CostExport, prior costE
 	// never mentioned them from showing perpetual drift.
 	tagKeys, d := optionalStringList(ctx, remote.Query.TagKeys)
 	diags.Append(d...)
+	virtualTagKeys, d := optionalStringList(ctx, remote.Query.VirtualTagKeys)
+	diags.Append(d...)
 	chargeTypes, d := optionalStringList(ctx, remote.Query.ChargeTypes)
 	diags.Append(d...)
 	filters, d := costFiltersTo(ctx, remote.Query.Filters)
@@ -563,13 +683,22 @@ func costExportStateFrom(ctx context.Context, remote *iw.CostExport, prior costE
 	}
 
 	query, d := types.ObjectValueFrom(ctx, costExportQueryAttrTypes, costExportQueryModel{
-		Dimensions:  dimensions,
-		TagKeys:     tagKeys,
-		ChargeTypes: chargeTypes,
-		CostBasis:   stringValue(remote.Query.CostBasis),
-		Filter:      filters,
+		Dimensions:     dimensions,
+		TagKeys:        tagKeys,
+		VirtualTagKeys: virtualTagKeys,
+		ChargeTypes:    chargeTypes,
+		CostBasis:      stringValue(remote.Query.CostBasis),
+		Filter:         filters,
 	})
 	diags.Append(d...)
+
+	// Null for the s3 and http branches, so a configuration that never mentions
+	// `target` does not drift against an empty map.
+	target := types.MapNull(types.StringType)
+	if remote.Destination.Kind == "warehouse" {
+		target, d = types.MapValueFrom(ctx, types.StringType, remote.Destination.Target)
+		diags.Append(d...)
+	}
 
 	destination, d := types.ObjectValueFrom(ctx, costExportDestinationAttrTypes, costExportDestinationModel{
 		Kind:           types.StringValue(remote.Destination.Kind),
@@ -580,6 +709,9 @@ func costExportStateFrom(ctx context.Context, remote *iw.CostExport, prior costE
 		ForcePathStyle: boolValue(remote.Destination.ForcePathStyle),
 		Method:         stringValue(remote.Destination.Method),
 		URLHint:        stringValue(remote.Destination.URLHint),
+		PluginID:       stringValue(remote.Destination.PluginID),
+		AccountID:      stringValue(remote.Destination.AccountID),
+		Target:         target,
 	})
 	diags.Append(d...)
 
@@ -587,13 +719,14 @@ func costExportStateFrom(ctx context.Context, remote *iw.CostExport, prior costE
 		ID:              types.StringValue(remote.ID),
 		Name:            types.StringValue(remote.Name),
 		Format:          types.StringValue(remote.Format),
+		Schema:          types.StringValue(costExportSchemaOrNative(remote.Schema)),
 		Cadence:         types.StringValue(remote.Cadence),
 		Hour:            types.Int64Value(remote.Hour),
 		Timezone:        types.StringValue(remote.Timezone),
 		RestatementDays: types.Int64Value(remote.RestatementDays),
 		Enabled:         types.BoolValue(remote.Enabled),
 
-		// Carried through, never read from the response — see the doc comment.
+		// Carried through, never read from the response: see the doc comment.
 		AccessKeyID:     prior.AccessKeyID,
 		SecretAccessKey: prior.SecretAccessKey,
 		URL:             prior.URL,
@@ -604,4 +737,14 @@ func costExportStateFrom(ctx context.Context, remote *iw.CostExport, prior costE
 		Query:       query,
 		Destination: destination,
 	}, diags
+}
+
+// costExportSchemaOrNative reads a missing `schema` (a server older than FOCUS
+// support, which only ever wrote native columns) as `native`, so state matches
+// the attribute's default instead of planning a change against an empty string.
+func costExportSchemaOrNative(schema string) string {
+	if schema == "" {
+		return "native"
+	}
+	return schema
 }

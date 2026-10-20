@@ -150,7 +150,7 @@ func TestQueryErrorIsDecoded(t *testing.T) {
 // is valid everywhere else is rejected by this route tree. The hint has to be
 // attached, and only for API keys.
 // The org tree accepts `iwk_` keys, so a 401 or a 403 there means something a
-// key holder can act on — but only if the provider says which. These pin the
+// key holder can act on, but only if the provider says which. These pin the
 // two hints apart, and pin that neither reaches a WorkOS-token caller, for whom
 // both would be nonsense.
 func TestAPIKeyHints(t *testing.T) {
@@ -187,7 +187,7 @@ func TestAPIKeyHints(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"Missing permission: budgets:write"}`))
 	}
 
-	// Org pinning. The server's own words, and they name an API key too — which
+	// Org pinning. The server's own words, and they name an API key too, which
 	// is why the deny-list is matched on its phrasing rather than on "API key".
 	wrongOrg := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -297,7 +297,7 @@ func TestListEnvelopesAreUnwrapped(t *testing.T) {
 
 // Cost centres, allocation rules and report folders have no single-GET route.
 // Their wrappers list and filter, and must synthesise a 404 when the id is
-// gone — otherwise a deletion outside Terraform never reaches RemoveResource.
+// gone, otherwise a deletion outside Terraform never reaches RemoveResource.
 func TestListAndFilterSynthesisesNotFound(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`[{"id":"cc1","name":"Platform"}]`))
@@ -324,6 +324,64 @@ func TestListAndFilterSynthesisesNotFound(t *testing.T) {
 	_, err = client.GetCostReportFolder(context.Background(), "gone")
 	if !IsNotFound(err) {
 		t.Fatalf("report folder: expected a synthesised 404, got %v", err)
+	}
+}
+
+// Dashboard notifications are read by listing the dashboard's schedules, so the
+// wrapper must hit the nested route and synthesise a 404 for a vanished id.
+func TestGetDashboardNotificationListsAndFilters(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`[{"id":"n1","dashboardId":"d1","cadence":"weekly","attachPdf":false}]`))
+	})
+
+	found, err := client.GetDashboardNotification(context.Background(), "d1", "n1")
+	if err != nil {
+		t.Fatalf("GetDashboardNotification: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/dashboards/d1/notifications") {
+		t.Errorf("path = %q, want the dashboard's nested notifications route", gotPath)
+	}
+	if found.DashboardID != "d1" || found.AttachPDF {
+		t.Errorf("notification = %+v", found)
+	}
+
+	_, err = client.GetDashboardNotification(context.Background(), "d1", "gone")
+	if !IsNotFound(err) {
+		t.Fatalf("expected a synthesised 404, got %v", err)
+	}
+}
+
+// A role default is read from the list of every role. A role whose default
+// was cleared outside Terraform is still listed (with a null dashboard), and
+// must read as gone so the next plan recreates it.
+func TestGetRoleDefaultDashboardTreatsClearedAsNotFound(t *testing.T) {
+	var gotPath string
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`[
+			{"roleId":"r1","roleName":"Finance","isSystem":false,"systemKey":null,"dashboardId":"d1"},
+			{"roleId":"r2","roleName":"Member","isSystem":true,"systemKey":"member","dashboardId":null}
+		]`))
+	})
+
+	found, err := client.GetRoleDefaultDashboard(context.Background(), "r1")
+	if err != nil {
+		t.Fatalf("GetRoleDefaultDashboard: %v", err)
+	}
+	if !strings.HasSuffix(gotPath, "/dashboards/role-defaults") {
+		t.Errorf("path = %q, want the role-defaults list", gotPath)
+	}
+	if found.DashboardID == nil || *found.DashboardID != "d1" {
+		t.Errorf("default = %+v", found)
+	}
+
+	if _, err := client.GetRoleDefaultDashboard(context.Background(), "r2"); !IsNotFound(err) {
+		t.Fatalf("cleared default: expected a synthesised 404, got %v", err)
+	}
+	if _, err := client.GetRoleDefaultDashboard(context.Background(), "gone"); !IsNotFound(err) {
+		t.Fatalf("missing role: expected a synthesised 404, got %v", err)
 	}
 }
 
@@ -355,7 +413,7 @@ func TestCostDateRangeMarshalsOneBranch(t *testing.T) {
 	}
 }
 
-// Same contract for export destinations — and the http branch must never carry
+// Same contract for export destinations, and the http branch must never carry
 // s3 keys, nor echo the write-only url back onto the wire.
 func TestCostExportDestinationMarshalsOneBranch(t *testing.T) {
 	bucket, region := "spend-exports", "eu-west-1"
@@ -381,6 +439,32 @@ func TestCostExportDestinationMarshalsOneBranch(t *testing.T) {
 	}
 	if strings.Contains(string(httpDest), "urlHint") {
 		t.Errorf("url hint is server-computed and must not be sent: %s", httpDest)
+	}
+
+	plugin, account := "snowflake", "acc-1"
+	warehouse, err := json.Marshal(CostExportDestination{
+		Kind:      "warehouse",
+		PluginID:  &plugin,
+		AccountID: &account,
+		Target:    map[string]string{"database": "ANALYTICS", "schema": "FINOPS", "table": "COSTS"},
+		Bucket:    &bucket,
+	})
+	if err != nil {
+		t.Fatalf("warehouse: %v", err)
+	}
+	decoded = map[string]any{}
+	if err := json.Unmarshal(warehouse, &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded["pluginId"] != "snowflake" || decoded["accountId"] != "acc-1" {
+		t.Errorf("warehouse destination = %s", warehouse)
+	}
+	if _, present := decoded["bucket"]; present {
+		t.Errorf("warehouse destination leaked an s3 key: %s", warehouse)
+	}
+	empty, err := json.Marshal(CostExportDestination{Kind: "warehouse", PluginID: &plugin, AccountID: &account})
+	if err != nil || !strings.Contains(string(empty), `"target":{}`) {
+		t.Errorf("warehouse destination must always send target, got %s (%v)", empty, err)
 	}
 
 	if _, err := json.Marshal(CostExportDestination{Kind: "gcs"}); err == nil {

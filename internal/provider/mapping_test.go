@@ -146,6 +146,28 @@ func TestCostFilterRoundTrip(t *testing.T) {
 	}
 }
 
+// `is_set` / `is_not_set` carry no values, and the API refuses `null` where it
+// wants `[]`: the empty list must survive the round trip as an empty slice.
+func TestValuelessCostFilterRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	list, diags := costFiltersTo(ctx, []iw.CostFilter{
+		{Dimension: "tag", Op: "is_not_set", Values: []string{}, TagKey: ptr("owner")},
+	})
+	if diags.HasError() {
+		t.Fatalf("costFiltersTo: %v", diags)
+	}
+	back, diags := costFiltersFrom(ctx, list)
+	if diags.HasError() {
+		t.Fatalf("costFiltersFrom: %v", diags)
+	}
+	if len(back) != 1 || back[0].Op != "is_not_set" {
+		t.Fatalf("clause lost: %+v", back)
+	}
+	if back[0].Values == nil || len(back[0].Values) != 0 {
+		t.Errorf("values must be an empty, non-nil slice, got %#v", back[0].Values)
+	}
+}
+
 func TestCostFiltersFromNullListIsEmptyNotNil(t *testing.T) {
 	got, diags := costFiltersFrom(context.Background(), types.ListNull(costFilterObjectType))
 	if diags.HasError() {
@@ -344,9 +366,144 @@ func TestSavedFilterStateTakesServerClausesWhenBlocksOwnTheResource(t *testing.T
 	}
 }
 
+func TestAnomalySuppressionRoundTrip(t *testing.T) {
+	remote := &iw.CostAnomalySuppression{
+		ID: "s1", Scope: "tag", ScopeKey: "prod", TagKey: ptr("env"), Recurrence: "weekly",
+		AnchorDay: "2026-10-05", StartsOn: "2026-10-05", ExpiresOn: "2027-01-04",
+		Reason: ptr("planned_launch"), CreatedAt: "2026-10-05T00:00:00Z", UpdatedAt: "2026-10-05T00:00:00Z",
+		Active: true, SuppressedCount: 3,
+	}
+	state := anomalySuppressionStateFrom(remote)
+	if !state.Note.IsNull() || !state.ScopeLabel.IsNull() || !state.SourceAnomalyID.IsNull() {
+		t.Error("absent nullable fields must map to null, not empty strings")
+	}
+	if state.SuppressedCount.ValueInt64() != 3 || !state.Active.ValueBool() {
+		t.Errorf("read-only fields lost: %+v", state)
+	}
+	in := anomalySuppressionInputFrom(state)
+	if in.TagKey == nil || *in.TagKey != "env" || in.StartsOn == nil || *in.StartsOn != "2026-10-05" {
+		t.Errorf("input lost tag key or start: %+v", in)
+	}
+	if in.Note != nil || in.Reason == nil || *in.Reason != "planned_launch" {
+		t.Errorf("reason or note mapped wrong: %+v", in)
+	}
+}
+
+func TestAnomalySettingsFeedbackTuningDefaultsOn(t *testing.T) {
+	state, d := anomalySettingsStateFrom(context.Background(), "org", &iw.CostAnomalySettings{Sigmas: 3, MinDeltaCents: 1000, NewSourceMinCents: 2500, SMSAlerts: "off"}, anomalySettingsResourceModel{})
+	if d.HasError() {
+		t.Fatalf("mapping: %v", d)
+	}
+	if !state.FeedbackTuning.ValueBool() {
+		t.Error("a read without feedbackTuning must default to true")
+	}
+	if defaults := anomalyDefaults(); defaults.FeedbackTuning == nil || !*defaults.FeedbackTuning {
+		t.Error("destroy must restore feedback tuning to on")
+	}
+}
+
+// The email recipient object is omit-to-keep on the wire, so the mapping has
+// exactly one job: never send a list the practitioner did not state, and never
+// send half the object, since the schema requires both keys once it is present.
+func TestEmailRecipientsMapping(t *testing.T) {
+	ctx := context.Background()
+	unknown := types.SetUnknown(types.StringType)
+	set := func(values ...string) types.Set {
+		if values == nil {
+			values = []string{}
+		}
+		s, d := types.SetValueFrom(ctx, types.StringType, values)
+		if d.HasError() {
+			t.Fatalf("building set: %v", d)
+		}
+		return s
+	}
+
+	t.Run("both unknown omits the object", func(t *testing.T) {
+		got, d := emailRecipientsFrom(ctx, unknown, unknown)
+		if d.HasError() || got != nil {
+			t.Errorf("want nil so the stored list is kept, got %+v (%v)", got, d)
+		}
+	})
+
+	t.Run("one configured sends both keys", func(t *testing.T) {
+		got, d := emailRecipientsFrom(ctx, unknown, set("finance@example.com"))
+		if d.HasError() || got == nil {
+			t.Fatalf("want an object, got nil (%v)", d)
+		}
+		if got.UserIDs == nil || len(got.UserIDs) != 0 {
+			t.Errorf("the unconfigured list must go as [], got %#v", got.UserIDs)
+		}
+		if len(got.Addresses) != 1 || got.Addresses[0] != "finance@example.com" {
+			t.Errorf("addresses lost: %#v", got.Addresses)
+		}
+	})
+
+	t.Run("empty sets clear", func(t *testing.T) {
+		got, _ := emailRecipientsFrom(ctx, set(), set())
+		if got == nil || got.UserIDs == nil || got.Addresses == nil {
+			t.Errorf("empty sets must send empty arrays, got %+v", got)
+		}
+	})
+
+	t.Run("a response always yields known sets", func(t *testing.T) {
+		members, addresses, d := emailRecipientsTo(ctx, &iw.AlertEmailRecipients{UserIDs: []string{"u1"}}, unknown, unknown)
+		if d.HasError() || members.IsUnknown() || addresses.IsUnknown() || addresses.IsNull() {
+			t.Errorf("want known sets, got %v / %v (%v)", members, addresses, d)
+		}
+		if len(members.Elements()) != 1 || len(addresses.Elements()) != 0 {
+			t.Errorf("unexpected sets: %v / %v", members, addresses)
+		}
+	})
+
+	t.Run("a server without the field keeps the prior value", func(t *testing.T) {
+		prior := set("u1")
+		members, addresses, _ := emailRecipientsTo(ctx, nil, prior, unknown)
+		if !members.Equal(prior) {
+			t.Errorf("prior members lost: %v", members)
+		}
+		if addresses.IsUnknown() || len(addresses.Elements()) != 0 {
+			t.Errorf("an unknown prior must settle to an empty set, got %v", addresses)
+		}
+	})
+}
+
 /* --------------------------------- helpers -------------------------------- */
 
 func ptr(s string) *string        { return &s }
 func ptrInt(i int64) *int64       { return &i }
 func ptrBool(b bool) *bool        { return &b }
 func ptrFloat(f float64) *float64 { return &f }
+
+func TestCostCanvasSpecKeepsConfiguredFormatting(t *testing.T) {
+	configured := "{\n  \"version\": 1,\n  \"blocks\": [{\"kind\": \"text\", \"id\": \"a\", \"text\": \"hi\"}]\n}"
+	prior := costCanvasResourceModel{SpecJSON: types.StringValue(configured)}
+
+	t.Run("equal JSON keeps the configured string", func(t *testing.T) {
+		remote := &iw.CostCanvas{ID: "c1", Name: "n", Spec: []byte(`{"blocks":[{"id":"a","kind":"text","text":"hi"}],"version":1}`)}
+		got := costCanvasStateFrom(remote, prior)
+		if got.SpecJSON.ValueString() != configured {
+			t.Errorf("spec_json = %q, want the configured string kept", got.SpecJSON.ValueString())
+		}
+		if !got.Description.IsNull() {
+			t.Error("a null description must stay null")
+		}
+	})
+
+	t.Run("a real change takes the server's spec", func(t *testing.T) {
+		server := `{"blocks":[],"version":1}`
+		got := costCanvasStateFrom(&iw.CostCanvas{ID: "c1", Name: "n", Spec: []byte(server)}, prior)
+		if got.SpecJSON.ValueString() != server {
+			t.Errorf("spec_json = %q, want %q", got.SpecJSON.ValueString(), server)
+		}
+	})
+
+	t.Run("null object keys are not a difference", func(t *testing.T) {
+		if !jsonSemanticallyEqual(`{"a":1,"b":null}`, `{"a":1}`) {
+			t.Error("an explicit null and an absent key should compare equal")
+		}
+		if jsonSemanticallyEqual(`{"a":[1,2]}`, `{"a":[2,1]}`) {
+			t.Error("array order is meaningful")
+		}
+	})
+}

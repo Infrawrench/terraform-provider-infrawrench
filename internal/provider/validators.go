@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"context"
+	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/float64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
@@ -19,14 +23,21 @@ type (
 	validatorInt64   = validator.Int64
 	validatorFloat64 = validator.Float64
 	validatorList    = validator.List
+	validatorSet     = validator.Set
 )
 
 // oneOfValidator is the enum check used throughout the schemas.
 //
 // The server's zod schemas are `strict()` with closed enums, so an invalid
-// value is a guaranteed 400. Catching it at plan time turns a failed apply —
-// which may already have created half the resources in a graph — into a plan
+// value is a guaranteed 400. Catching it at plan time turns a failed apply
+// (which may already have created half the resources in a graph) into a plan
 // error that costs nothing.
+// blendedBasisDescription ends every cost_basis attribute's description, so
+// the four resources that take a basis explain the blended one identically.
+const blendedBasisDescription = "or `blended` to also share each commitment's discount evenly across " +
+	"all the usage it could cover, so every team or customer pays the same effective rate (day " +
+	"totals match amortized)."
+
 func oneOfValidator(allowed ...string) validator.String {
 	return stringvalidator.OneOf(allowed...)
 }
@@ -43,7 +54,7 @@ func oneOfValidator(allowed ...string) validator.String {
 //
 //   - Most of these routes *reject* an out-of-range value. Validating converts a
 //     failed apply into a plan error.
-//   - The probe's timings are *clamped* instead — 90 seconds becomes 60 and the
+//   - The probe's timings are *clamped* instead: 90 seconds becomes 60 and the
 //     write succeeds. That is worse than a rejection, because the configuration
 //     and the stored object now disagree forever and every subsequent plan shows
 //     a diff that applying cannot fix. Validating is the only way to surface it.
@@ -62,7 +73,7 @@ func betweenFloat(minimum, maximum float64) validator.Float64 {
 	return float64validator.Between(minimum, maximum)
 }
 
-// elementsBetween bounds every element of an integer list — the weekday lists,
+// elementsBetween bounds every element of an integer list: the weekday lists,
 // and the efficiency alert's notice horizons. An out-of-range element is as
 // rejectable as an out-of-range scalar and just as knowable in advance.
 func elementsBetween(minimum, maximum int64) validator.List {
@@ -70,7 +81,7 @@ func elementsBetween(minimum, maximum int64) validator.List {
 }
 
 // sizeBetween bounds how many elements a list may hold, where the API caps it.
-// Applies to nested blocks as well as list attributes — both are validator.List.
+// Applies to nested blocks as well as list attributes: both are validator.List.
 func sizeBetween(minimum, maximum int) validator.List {
 	return listvalidator.SizeBetween(minimum, maximum)
 }
@@ -81,13 +92,81 @@ func sizeAtMost(maximum int) validator.List {
 	return listvalidator.SizeAtMost(maximum)
 }
 
+// setSizeAtMost is sizeAtMost for a set-typed attribute: the email recipient
+// lists and the allowed-domain list, where order carries no meaning.
+func setSizeAtMost(maximum int) validator.Set {
+	return setvalidator.SizeAtMost(maximum)
+}
+
+// listValueStringsMatch checks every string in a list against a pattern, for
+// lists whose elements have a grammar (the resource report's column ids).
+func listValueStringsMatch(re *regexp.Regexp, message string) validator.List {
+	return listvalidator.ValueStringsAre(stringvalidator.RegexMatches(re, message))
+}
+
 // elementsLengthBetween bounds the length of every string in a list, for the
 // places the API states a per-element limit.
 func elementsLengthBetween(minimum, maximum int) validator.List {
 	return listvalidator.ValueStringsAre(stringvalidator.LengthBetween(minimum, maximum))
 }
 
+// aboveZeroAtMostFloat bounds a float attribute to (0, maximum]: the lower bound
+// is exclusive, which float64validator.Between cannot say. A split share of
+// exactly 0 is meaningless and the API rejects it, so it is a plan error here
+// rather than an HTTP 400 mid-apply.
+func aboveZeroAtMostFloat(maximum float64) validator.Float64 {
+	return aboveZeroAtMostValidator{maximum: maximum}
+}
+
+type aboveZeroAtMostValidator struct{ maximum float64 }
+
+func (v aboveZeroAtMostValidator) Description(_ context.Context) string {
+	return fmt.Sprintf("value must be greater than 0 and at most %g", v.maximum)
+}
+
+func (v aboveZeroAtMostValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v aboveZeroAtMostValidator) ValidateFloat64(ctx context.Context, req validator.Float64Request, resp *validator.Float64Response) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	value := req.ConfigValue.ValueFloat64()
+	if value <= 0 || value > v.maximum {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid Attribute Value",
+			fmt.Sprintf("Attribute %s %s, got: %g", req.Path, v.Description(ctx), value))
+	}
+}
+
 // joinBackticked renders an enum for a Markdown description.
 func joinBackticked(values []string) string {
 	return strings.Join(values, "`, `")
+}
+
+// positiveFloatAtMost bounds a float attribute to (0, maximum]: the usage
+// amounts the API requires to be strictly positive. float64validator has no
+// exclusive lower bound, so the zero case is checked here.
+func positiveFloatAtMost(maximum float64) validator.Float64 {
+	return positiveFloatValidator{maximum: maximum}
+}
+
+type positiveFloatValidator struct{ maximum float64 }
+
+func (v positiveFloatValidator) Description(_ context.Context) string {
+	return fmt.Sprintf("value must be greater than 0 and at most %g", v.maximum)
+}
+
+func (v positiveFloatValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v positiveFloatValidator) ValidateFloat64(ctx context.Context, req validator.Float64Request, resp *validator.Float64Response) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	value := req.ConfigValue.ValueFloat64()
+	if value <= 0 || value > v.maximum {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid attribute value", v.Description(ctx))
+	}
 }

@@ -70,7 +70,7 @@ func TestSplitImportID(t *testing.T) {
 }
 
 // The cadence-irrelevant day field must stay null in state. The server always
-// returns both — they are non-null columns with defaults — so writing the unused
+// returns both (they are non-null columns with defaults) so writing the unused
 // one back would show a permanent diff against a configuration that correctly
 // leaves it out.
 func TestReportNotificationStateDropsTheUnusedDayField(t *testing.T) {
@@ -136,6 +136,54 @@ func TestReportNotificationInputSendsOnlyTheRelevantDay(t *testing.T) {
 	}
 }
 
+// Dashboard notifications follow the same day-field rule as report
+// notifications, and carry attach_pdf through in both directions.
+func TestDashboardNotificationMapping(t *testing.T) {
+	ctx := context.Background()
+
+	weekly, diags := dashboardNotificationStateFrom(ctx, &iw.DashboardNotification{
+		ID: "n1", DashboardID: "d1", Cadence: "weekly",
+		SendDay: 3, SendDayOfMonth: 1, Hour: 9, Timezone: "Europe/Berlin",
+		EmailRecipients: []string{"a@example.com"}, Enabled: true, AttachPDF: false,
+	})
+	if diags.HasError() {
+		t.Fatalf("dashboardNotificationStateFrom: %v", diags)
+	}
+	if weekly.SendDay.ValueInt64() != 3 || !weekly.SendDayOfMonth.IsNull() {
+		t.Errorf("weekly cadence must keep send_day only, got %v / %v", weekly.SendDay, weekly.SendDayOfMonth)
+	}
+	if weekly.DashboardID.ValueString() != "d1" {
+		t.Errorf("dashboard_id = %v", weekly.DashboardID)
+	}
+	if weekly.AttachPDF.IsNull() || weekly.AttachPDF.ValueBool() {
+		t.Errorf("attach_pdf must read back false, got %v", weekly.AttachPDF)
+	}
+
+	model := dashboardNotificationResourceModel{
+		DashboardID:    types.StringValue("d1"),
+		Cadence:        types.StringValue("monthly"),
+		SendDay:        types.Int64Value(3),
+		SendDayOfMonth: types.Int64Value(28),
+		Hour:           types.Int64Value(9),
+		Timezone:       types.StringValue("UTC"),
+		Enabled:        types.BoolValue(true),
+		AttachPDF:      types.BoolValue(false),
+	}
+	input, diags := dashboardNotificationInputFrom(ctx, model)
+	if diags.HasError() {
+		t.Fatalf("dashboardNotificationInputFrom: %v", diags)
+	}
+	if input.SendDay != nil || input.SendDayOfMonth == nil || *input.SendDayOfMonth != 28 {
+		t.Errorf("a monthly cadence must send only send_day_of_month, got %+v", input)
+	}
+	if input.AttachPDF == nil || *input.AttachPDF {
+		t.Errorf("attach_pdf = false must be sent explicitly, got %v", input.AttachPDF)
+	}
+	if input.SlackChannelIDs == nil || input.TeamsWebhookIDs == nil || input.EmailRecipients == nil {
+		t.Error("destination lists must marshal as [] rather than being omitted")
+	}
+}
+
 // A rate the server padded to ten decimal places is the same rate the
 // practitioner wrote. Keeping their spelling is what stops a permanent diff.
 func TestExchangeRateStateKeepsTheConfiguredSpelling(t *testing.T) {
@@ -157,6 +205,33 @@ func TestExchangeRateStateKeepsTheConfiguredSpelling(t *testing.T) {
 	}, prior)
 	if changed.Rate.ValueString() != "1.0900000000" {
 		t.Errorf("a real change must surface as drift, got %q", changed.Rate.ValueString())
+	}
+}
+
+// An end date round-trips, and an open-ended rate reads back as null rather
+// than an empty string, which would diff against an omitted attribute.
+func TestExchangeRateEffectiveToMapping(t *testing.T) {
+	end := "2026-07-31"
+	bounded := exchangeRateStateFrom(&iw.ExchangeRate{
+		ID: "r1", FromCurrency: "EUR", ToCurrency: "USD",
+		Rate: "1.0850000000", EffectiveFrom: "2026-07-01", EffectiveTo: &end,
+	}, exchangeRateResourceModel{})
+	if bounded.EffectiveTo.ValueString() != end {
+		t.Errorf("effective_to lost: %q", bounded.EffectiveTo.ValueString())
+	}
+	open := exchangeRateStateFrom(&iw.ExchangeRate{
+		ID: "r1", FromCurrency: "EUR", ToCurrency: "USD",
+		Rate: "1.0850000000", EffectiveFrom: "2026-07-01",
+	}, exchangeRateResourceModel{})
+	if !open.EffectiveTo.IsNull() {
+		t.Errorf("an open-ended rate must read back as null, got %q", open.EffectiveTo.ValueString())
+	}
+	input := exchangeRateInputFrom(exchangeRateResourceModel{EffectiveTo: types.StringNull()})
+	if input.EffectiveTo != nil {
+		t.Errorf("an omitted end date must be sent as null")
+	}
+	if rateBasisOrDefault("") != "daily" || rateBasisOrDefault("month_end") != "month_end" {
+		t.Errorf("rate basis default is wrong")
 	}
 }
 
@@ -222,13 +297,81 @@ func TestWriteOnlyFieldsSurviveARefresh(t *testing.T) {
 			t.Error("the stored deploy answers were dropped")
 		}
 	})
+
+	t.Run("litellm api key", func(t *testing.T) {
+		prior := aiRequestSourceResourceModel{APIKey: types.StringValue("sk-master")}
+		state, diags := aiRequestSourceStateFrom(context.Background(), &iw.AIRequestSource{
+			ID: "s1", Kind: "litellm", SourceKindID: "litellm-spend-logs", LookbackDays: 7, HasAPIKey: true,
+		}, prior, 0)
+		if diags.HasError() {
+			t.Fatalf("aiRequestSourceStateFrom: %v", diags)
+		}
+		if state.APIKey.ValueString() != "sk-master" {
+			t.Errorf("the LiteLLM key was dropped: %v", state.APIKey)
+		}
+	})
+}
+
+// The server clamps an AI source's lookback to its kind's history cap and
+// normalises a LiteLLM base URL. Reading either back verbatim would fail the
+// consistency check on apply and diff forever after, so both keep the
+// configured spelling when, and only when, the server's value is equivalent.
+func TestAIRequestSourceServerNormalisation(t *testing.T) {
+	ctx := context.Background()
+	remote := func(lookback int64, baseURL *string) *iw.AIRequestSource {
+		return &iw.AIRequestSource{
+			ID: "s1", Kind: "plugin", SourceKindID: "bedrock-cloudwatch", LookbackDays: lookback, BaseURL: baseURL,
+		}
+	}
+
+	t.Run("a clamped lookback keeps the configured value", func(t *testing.T) {
+		prior := aiRequestSourceResourceModel{LookbackDays: types.Int64Value(90)}
+		state, _ := aiRequestSourceStateFrom(ctx, remote(30, nil), prior, 30)
+		if state.LookbackDays.ValueInt64() != 90 {
+			t.Errorf("lookback_days = %v, want the configured 90", state.LookbackDays)
+		}
+	})
+
+	t.Run("a lookback below the cap is drift", func(t *testing.T) {
+		prior := aiRequestSourceResourceModel{LookbackDays: types.Int64Value(20)}
+		state, _ := aiRequestSourceStateFrom(ctx, remote(10, nil), prior, 30)
+		if state.LookbackDays.ValueInt64() != 10 {
+			t.Errorf("lookback_days = %v, want the server's 10", state.LookbackDays)
+		}
+	})
+
+	t.Run("an unknown cap reports the server value", func(t *testing.T) {
+		prior := aiRequestSourceResourceModel{LookbackDays: types.Int64Value(90)}
+		state, _ := aiRequestSourceStateFrom(ctx, remote(30, nil), prior, 0)
+		if state.LookbackDays.ValueInt64() != 30 {
+			t.Errorf("lookback_days = %v, want the server's 30", state.LookbackDays)
+		}
+	})
+
+	t.Run("an equivalent base URL keeps the configured spelling", func(t *testing.T) {
+		stored := "https://litellm.example.com/proxy"
+		prior := aiRequestSourceResourceModel{BaseURL: types.StringValue("https://LiteLLM.example.com:443/proxy/")}
+		state, _ := aiRequestSourceStateFrom(ctx, remote(7, &stored), prior, 0)
+		if state.BaseURL.ValueString() != "https://LiteLLM.example.com:443/proxy/" {
+			t.Errorf("base_url = %v, want the configured spelling", state.BaseURL)
+		}
+	})
+
+	t.Run("a different base URL is drift", func(t *testing.T) {
+		stored := "https://other.example.com"
+		prior := aiRequestSourceResourceModel{BaseURL: types.StringValue("https://litellm.example.com")}
+		state, _ := aiRequestSourceStateFrom(ctx, remote(7, &stored), prior, 0)
+		if state.BaseURL.ValueString() != stored {
+			t.Errorf("base_url = %v, want the server's %q", state.BaseURL, stored)
+		}
+	})
 }
 
 // An Optional+Computed collection must be mapped faithfully: `[]` stays `[]`
 // and only a genuinely absent key becomes null.
 //
 // The temptation is to fold `[]` into null, because on the drift settings the
-// two mean the same thing — every account. Terraform's consistency check
+// two mean the same thing: every account. Terraform's consistency check
 // forbids it: a configuration that spells `account_ids = []` produces a *known*
 // empty list in the plan, and answering a known plan value with null is
 // "inconsistent result after apply". Only an omitted attribute leaves an
@@ -296,7 +439,7 @@ func TestCustomGraphEmptySourceIsNull(t *testing.T) {
 }
 
 // The selector fields are how "match anything" is spelled, and the server
-// requires all five keys — so an omitted attribute has to reach it as an
+// requires all five keys, so an omitted attribute has to reach it as an
 // explicit null rather than as an absent key.
 func TestMetricAlertSelectorNullsAreSent(t *testing.T) {
 	input := metricAlertInputFrom(metricAlertResourceModel{
@@ -316,7 +459,7 @@ func TestMetricAlertSelectorNullsAreSent(t *testing.T) {
 }
 
 // Status page components round trip in order, and the probe's own live status is
-// deliberately not written into state — it changes without the page changing.
+// deliberately not written into state: it changes without the page changing.
 func TestStatusPageComponentsRoundTripInOrder(t *testing.T) {
 	ctx := context.Background()
 
@@ -395,7 +538,7 @@ func TestAlertRoutingRoundTripPreservesRuleIDs(t *testing.T) {
 // The write is a whole-list replacement and the route normalises an omitted
 // `quietHours` to an explicit null, so a provider that read a rule without
 // carrying these two forward would silently delete a window or an escalation
-// policy configured in the app — on the very next apply, with nothing in the
+// policy configured in the app: on the very next apply, with nothing in the
 // plan to warn anybody. That is what this test exists to stop.
 func TestAlertRoutingCarriesQuietHoursAndEscalation(t *testing.T) {
 	ctx := context.Background()
@@ -455,5 +598,210 @@ func TestAlertRoutingCarriesQuietHoursAndEscalation(t *testing.T) {
 	// would grow an empty policy the practitioner never asked for.
 	if rules[1].QuietHours != nil || rules[1].Escalation != nil {
 		t.Error("a rule with no quiet hours or escalation must send neither")
+	}
+}
+
+// A github-issues destination carries no id, and must read back and write out
+// as exactly that rather than being dropped as an unknown kind.
+func TestAlertRoutingCarriesGithubIssuesDestination(t *testing.T) {
+	ctx := context.Background()
+
+	state, diags := alertRoutingStateFrom(ctx, "org_1", []iw.AlertRule{{
+		ID: "rule-1", Name: "File savings", Enabled: true,
+		Conditions: []iw.AlertCondition{
+			{Field: "trigger", Op: "in", Values: []string{"savingsFindings"}},
+		},
+		Destinations: []iw.AlertDestination{{Kind: "github-issues"}},
+	}})
+	if diags.HasError() {
+		t.Fatalf("alertRoutingStateFrom: %v", diags)
+	}
+
+	rules, diags := alertRulesFrom(ctx, state.Rule)
+	if diags.HasError() {
+		t.Fatalf("alertRulesFrom: %v", diags)
+	}
+	if len(rules) != 1 || len(rules[0].Destinations) != 1 {
+		t.Fatalf("destination lost: %+v", rules)
+	}
+	dest := rules[0].Destinations[0]
+	if dest.Kind != "github-issues" || dest.ChannelID != nil || dest.WebhookID != nil || dest.ScheduleID != nil {
+		t.Errorf("github-issues destination must be only its kind, got %+v", dest)
+	}
+
+	found := false
+	for _, kind := range alertDestinationKind {
+		if kind == "github-issues" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("github-issues is missing from the destination kinds the schema accepts")
+	}
+}
+
+// The GitHub issue settings document is a whole-document replace, so every
+// field must survive a read/write round trip, and a route's match must surface
+// only its own branch.
+func TestGithubIssueSettingsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	updated := "2026-10-05T12:00:00Z"
+	remote := &iw.GithubIssueSettings{
+		Enabled:     true,
+		DefaultRepo: &iw.GithubRepoRef{InstallationID: 42, FullName: "acme/infra"},
+		Labels:      []string{"infrawrench", "cost"},
+		Assignees:   []string{},
+		Routes: []iw.GithubIssueRoute{
+			{
+				ID:        ptr("route-1"),
+				Match:     iw.GithubIssueRouteMatch{Kind: "cost_centre", CostCentreID: ptr("cc-1")},
+				Repo:      iw.GithubRepoRef{InstallationID: 42, FullName: "acme/payments"},
+				Labels:    []string{"payments"},
+				Assignees: []string{"octocat"},
+			},
+			{
+				ID:        ptr("route-2"),
+				Match:     iw.GithubIssueRouteMatch{Kind: "tag", TagKey: ptr("team")},
+				Repo:      iw.GithubRepoRef{InstallationID: 7, FullName: "acme/search"},
+				Labels:    []string{},
+				Assignees: []string{},
+			},
+		},
+		ResolveAction:       "close",
+		PullRequestsEnabled: true,
+		IacSources: []iw.GithubIacSource{
+			{ID: ptr("src-1"), Repo: iw.GithubRepoRef{InstallationID: 42, FullName: "acme/infra"}, Directory: ""},
+			{
+				ID: ptr("src-2"), IacAccountID: ptr("acct-1"),
+				Repo:       iw.GithubRepoRef{InstallationID: 42, FullName: "acme/infra"},
+				BaseBranch: ptr("main"), Directory: "infra/prod",
+			},
+		},
+		UpdatedAt: &updated,
+	}
+
+	state, diags := githubIssueSettingsStateFrom(ctx, "org_1", remote)
+	if diags.HasError() {
+		t.Fatalf("githubIssueSettingsStateFrom: %v", diags)
+	}
+	if state.DefaultRepository.ValueString() != "acme/infra" || state.DefaultInstallationID.ValueInt64() != 42 {
+		t.Errorf("default repository lost: %v / %v", state.DefaultRepository, state.DefaultInstallationID)
+	}
+
+	var routes []githubIssueRouteModel
+	diags = state.Route.ElementsAs(ctx, &routes, false)
+	if diags.HasError() {
+		t.Fatalf("routes: %v", diags)
+	}
+	if !routes[0].TagKey.IsNull() || !routes[0].TagValue.IsNull() {
+		t.Error("a cost centre route must not read back tag fields")
+	}
+	if !routes[1].CostCentreID.IsNull() || !routes[1].TagValue.IsNull() {
+		t.Error("a tag route with no value must read back a null tag_value and no cost centre")
+	}
+
+	input, diags := githubIssueSettingsInputFrom(ctx, state)
+	if diags.HasError() {
+		t.Fatalf("githubIssueSettingsInputFrom: %v", diags)
+	}
+	if !input.Enabled || input.ResolveAction != "close" || !input.PullRequestsEnabled {
+		t.Errorf("scalars mangled: %+v", input)
+	}
+	if input.DefaultRepo == nil || input.DefaultRepo.FullName != "acme/infra" {
+		t.Errorf("default repository not sent: %+v", input.DefaultRepo)
+	}
+	if len(input.Routes) != 2 || *input.Routes[0].ID != "route-1" || input.Routes[1].Repo.FullName != "acme/search" {
+		t.Errorf("routes mangled: %+v", input.Routes)
+	}
+	if input.Routes[1].Match.TagValue != nil {
+		t.Error("an unset tag value must be sent as null, meaning any value")
+	}
+	if len(input.IacSources) != 2 || input.IacSources[0].IacAccountID != nil ||
+		input.IacSources[1].Directory != "infra/prod" || *input.IacSources[1].BaseBranch != "main" {
+		t.Errorf("iac sources mangled: %+v", input.IacSources)
+	}
+	if input.Assignees == nil || input.Routes[1].Labels == nil {
+		t.Error("empty lists must be sent as [], never null")
+	}
+}
+
+// With no default repository the document reads back with both halves null,
+// which is what an omitted pair in configuration plans as.
+func TestGithubIssueSettingsNoDefaultRepository(t *testing.T) {
+	ctx := context.Background()
+
+	defaults := iw.DefaultGithubIssueSettings()
+	state, diags := githubIssueSettingsStateFrom(ctx, "org_1", &iw.GithubIssueSettings{
+		Enabled:       defaults.Enabled,
+		Labels:        defaults.Labels,
+		Assignees:     defaults.Assignees,
+		Routes:        defaults.Routes,
+		ResolveAction: defaults.ResolveAction,
+		IacSources:    defaults.IacSources,
+	})
+	if diags.HasError() {
+		t.Fatalf("githubIssueSettingsStateFrom: %v", diags)
+	}
+	if !state.DefaultRepository.IsNull() || !state.DefaultInstallationID.IsNull() {
+		t.Error("no default repository must read back as null")
+	}
+	if !state.UpdatedAt.IsNull() {
+		t.Error("a never-saved document has no updated_at")
+	}
+
+	input, diags := githubIssueSettingsInputFrom(ctx, state)
+	if diags.HasError() {
+		t.Fatalf("githubIssueSettingsInputFrom: %v", diags)
+	}
+	if input.DefaultRepo != nil {
+		t.Error("an absent default repository must be sent as null")
+	}
+}
+
+// A just-in-time policy target whose name was omitted is stored with its id as
+// the name. Reading that back as the id would turn an omitted attribute into a
+// permanent diff, so a name equal to its id maps to null; a real name survives,
+// and the input side puts the id back.
+func TestJitPolicyTargetNamesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	remote := &iw.JitPolicy{
+		ID:        "p1",
+		Name:      "Prod",
+		AccountID: "a1",
+		Targets: []iw.JitPolicyTarget{
+			{ScopeID: "123456789012", ScopeName: "123456789012", RoleID: "ps-1", RoleName: "Admin"},
+		},
+		MaxDurationMinutes:     120,
+		DefaultDurationMinutes: 60,
+		RequestTimeoutMinutes:  30,
+		ApproverRoleIDs:        []string{"r1"},
+	}
+	state, diags := jitPolicyStateFrom(ctx, remote)
+	if diags.HasError() {
+		t.Fatalf("jitPolicyStateFrom: %v", diags)
+	}
+	if !state.Target[0].ScopeName.IsNull() {
+		t.Errorf("a name equal to its id should read as unset, got %q", state.Target[0].ScopeName.ValueString())
+	}
+	if state.Target[0].RoleName.ValueString() != "Admin" {
+		t.Errorf("a real role name should survive, got %v", state.Target[0].RoleName)
+	}
+	if state.RequesterUserIDs.IsNull() || len(state.RequesterUserIDs.Elements()) != 0 {
+		t.Errorf("an empty list must read as [] (the attribute's default), got %v", state.RequesterUserIDs)
+	}
+	if !state.Description.IsNull() {
+		t.Errorf("no description should read as null, got %v", state.Description)
+	}
+
+	input, diags := jitPolicyInputFrom(ctx, state)
+	if diags.HasError() {
+		t.Fatalf("jitPolicyInputFrom: %v", diags)
+	}
+	if input.Targets[0].ScopeName != "123456789012" {
+		t.Errorf("an unset name is sent as the id, got %q", input.Targets[0].ScopeName)
+	}
+	if input.RequesterUserIDs == nil {
+		t.Errorf("lists are always sent, never omitted: an omitted list on a PUT reads as everyone")
 	}
 }

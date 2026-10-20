@@ -12,7 +12,7 @@ import (
 //
 //  1. A field the server treats as "omitted means clear it" is a pointer with
 //     `omitempty`. Terraform always sends the whole configuration, so a null in
-//     config becomes an omitted key becomes a cleared value — which is what the
+//     config becomes an omitted key becomes a cleared value, which is what the
 //     practitioner asked for.
 //
 //  2. A field the server treats as "omitted means leave it alone" is a pointer
@@ -50,10 +50,32 @@ type BudgetThreshold struct {
 	Percent int64  `json:"percent"`
 }
 
+// BudgetExplicitPeriod is one entry of an explicit period list, with its own
+// amount in whichever field the budget's measure uses.
+type BudgetExplicitPeriod struct {
+	Start       string   `json:"start"`
+	End         string   `json:"end"`
+	AmountCents *int64   `json:"amountCents,omitempty"`
+	UsageAmount *float64 `json:"usageAmount,omitempty"`
+}
+
+// BudgetPeriod is the server's `kind`-tagged union: a recurring cadence
+// (Unit, Interval, StartDate) or an explicit list (Periods). Every branch
+// field is omitempty because the server's schema is strict: a recurring
+// period carrying a stray `periods` key is rejected.
+type BudgetPeriod struct {
+	Kind      string                 `json:"kind"`
+	Unit      *string                `json:"unit,omitempty"`
+	Interval  *int64                 `json:"interval,omitempty"`
+	StartDate *string                `json:"startDate,omitempty"`
+	Periods   []BudgetExplicitPeriod `json:"periods,omitempty"`
+}
+
 // BudgetInput is the POST/PUT body.
 //
-// SavedFilterID, ScenarioModelID and UseAdjustedSpend are all "omitted means
-// clear" on PUT, hence omitempty pointers.
+// SavedFilterID, ScenarioModelID, UseAdjustedSpend, Period and
+// ParentBudgetID are all "omitted means clear" on PUT, hence omitempty
+// pointers. AmountCents is 0 for a usage budget or an explicit period list.
 type BudgetInput struct {
 	Name             string            `json:"name"`
 	AmountCents      int64             `json:"amountCents"`
@@ -64,6 +86,13 @@ type BudgetInput struct {
 	Thresholds       []BudgetThreshold `json:"thresholds"`
 	CostBasis        *string           `json:"costBasis,omitempty"`
 	UseAdjustedSpend *bool             `json:"useAdjustedSpend,omitempty"`
+	Measure          *string           `json:"measure,omitempty"`
+	UsageUnit        *string           `json:"usageUnit,omitempty"`
+	UsageAmount      *float64          `json:"usageAmount,omitempty"`
+	Period           *BudgetPeriod     `json:"period,omitempty"`
+	ParentBudgetID   *string           `json:"parentBudgetId,omitempty"`
+	// EmailRecipients is nil to leave the stored list unchanged.
+	EmailRecipients *AlertEmailRecipients `json:"emailRecipients,omitempty"`
 }
 
 // Budget is the union of the two shapes this endpoint returns.
@@ -71,31 +100,46 @@ type BudgetInput struct {
 // GET returns BudgetWithStatus (live spend, no timestamps); POST and PUT return
 // the raw row (timestamps, no spend). Decoding both into one struct with
 // pointers everywhere that differs is the only way a Create followed by a Read
-// does not look like drift — the fields the write response omits stay nil and
+// does not look like drift: the fields the write response omits stay nil and
 // the Read fills them in.
 type Budget struct {
-	ID                string            `json:"id"`
-	OrganizationID    string            `json:"organizationId,omitempty"`
-	Name              string            `json:"name"`
-	AmountCents       int64             `json:"amountCents"`
-	Currency          string            `json:"currency"`
-	Filters           []CostFilter      `json:"filters"`
-	SavedFilterID     *string           `json:"savedFilterId"`
-	ScenarioModelID   *string           `json:"scenarioModelId"`
-	ScenarioModelName *string           `json:"scenarioModelName,omitempty"`
-	Thresholds        []BudgetThreshold `json:"thresholds"`
-	CostBasis         *string           `json:"costBasis"`
-	UseAdjustedSpend  *bool             `json:"useAdjustedSpend"`
+	ID                string                `json:"id"`
+	OrganizationID    string                `json:"organizationId,omitempty"`
+	Name              string                `json:"name"`
+	AmountCents       int64                 `json:"amountCents"`
+	Currency          string                `json:"currency"`
+	Filters           []CostFilter          `json:"filters"`
+	SavedFilterID     *string               `json:"savedFilterId"`
+	ScenarioModelID   *string               `json:"scenarioModelId"`
+	ScenarioModelName *string               `json:"scenarioModelName,omitempty"`
+	Thresholds        []BudgetThreshold     `json:"thresholds"`
+	CostBasis         *string               `json:"costBasis"`
+	UseAdjustedSpend  *bool                 `json:"useAdjustedSpend"`
+	Measure           *string               `json:"measure"`
+	UsageUnit         *string               `json:"usageUnit"`
+	UsageAmount       *float64              `json:"usageAmount"`
+	Period            *BudgetPeriod         `json:"period"`
+	ParentBudgetID    *string               `json:"parentBudgetId"`
+	EmailRecipients   *AlertEmailRecipients `json:"emailRecipients"`
 
-	// Status fields — present on GET only.
+	// Status fields: present on GET only.
 	Month                 *string     `json:"month,omitempty"`
 	ActualCents           *int64      `json:"actualCents,omitempty"`
 	RawActualCents        *int64      `json:"rawActualCents,omitempty"`
 	ForecastCents         *int64      `json:"forecastCents,omitempty"`
+	ForecastLowCents      *int64      `json:"forecastLowCents,omitempty"`
+	ForecastHighCents     *int64      `json:"forecastHighCents,omitempty"`
 	ScenarioForecastCents *int64      `json:"scenarioForecastCents,omitempty"`
 	Placements            []Placement `json:"placements,omitempty"`
+	PeriodStart           *string     `json:"periodStart,omitempty"`
+	PeriodEnd             *string     `json:"periodEnd,omitempty"`
+	PeriodLimit           *float64    `json:"periodLimit,omitempty"`
+	ActualUsage           *float64    `json:"actualUsage,omitempty"`
+	ForecastUsage         *float64    `json:"forecastUsage,omitempty"`
+	RolledUp              *bool       `json:"rolledUp,omitempty"`
+	ChildCount            *int64      `json:"childCount,omitempty"`
 
-	// Row fields — present on POST/PUT only.
+	// Row fields: present on POST/PUT only.
 	CreatedByUserID *string `json:"createdByUserId,omitempty"`
 	CreatedAt       *string `json:"createdAt,omitempty"`
 	UpdatedAt       *string `json:"updatedAt,omitempty"`
@@ -134,6 +178,10 @@ type AllocationRuleMatch struct {
 	AccountID *string `json:"accountId,omitempty"`
 	PluginID  *string `json:"pluginId,omitempty"`
 	Service   *string `json:"service,omitempty"`
+	// VirtualTagKey matches rows where the virtual tag is set; with
+	// VirtualTagValue, rows where it holds that value.
+	VirtualTagKey   *string `json:"virtualTagKey,omitempty"`
+	VirtualTagValue *string `json:"virtualTagValue,omitempty"`
 }
 
 // AllocationRuleInput is the POST/PUT body.
@@ -163,10 +211,20 @@ type RequiredTag struct {
 	AllowedValues []string `json:"allowedValues,omitempty"`
 }
 
-// TagPolicy is an org singleton — no id, no POST, no DELETE.
+// TagPolicy is an org singleton: no id, no POST, no DELETE.
 type TagPolicy struct {
 	RequiredTags    []RequiredTag `json:"requiredTags"`
 	EnforceOnCreate bool          `json:"enforceOnCreate"`
+}
+
+/* ----------------------------- tag key settings ---------------------------- */
+
+// TagKeySettings is an org singleton: the tag keys hidden from every picker
+// (exact keys or `prefix*` patterns) and the ones pinned to the top, in order.
+// No id, no POST, no DELETE; both lists are always present on the wire.
+type TagKeySettings struct {
+	Hidden    []string `json:"hidden"`
+	Preferred []string `json:"preferred"`
 }
 
 /* ------------------------------ saved filters ------------------------------ */
@@ -195,12 +253,64 @@ type SavedCostFilter struct {
 	UpdatedAt       string       `json:"updatedAt"`
 }
 
+/* ------------------------------ savings views ------------------------------ */
+
+// SavingsFindingTagFilter matches findings carrying a tag key, optionally with
+// one of Values.
+type SavingsFindingTagFilter struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values,omitempty"`
+}
+
+// SavingsFindingFilter is a saved view's filter. The server drops empty lists
+// and blank fields on write, so every field is omitempty here and the provider
+// maps an unset attribute to an absent key.
+type SavingsFindingFilter struct {
+	Kinds             []string                  `json:"kinds,omitempty"`
+	PluginIDs         []string                  `json:"pluginIds,omitempty"`
+	AccountIDs        []string                  `json:"accountIds,omitempty"`
+	Regions           []string                  `json:"regions,omitempty"`
+	Tags              []SavingsFindingTagFilter `json:"tags,omitempty"`
+	MinMonthlySavings *float64                  `json:"minMonthlySavings,omitempty"`
+	DetectedFrom      *string                   `json:"detectedFrom,omitempty"`
+	DetectedTo        *string                   `json:"detectedTo,omitempty"`
+	Search            *string                   `json:"search,omitempty"`
+}
+
+// SavingsFindingSort orders a saved view's list.
+type SavingsFindingSort struct {
+	Field     string `json:"field"`
+	Direction string `json:"direction"`
+}
+
+// SavingsViewInput is the POST/PUT body (PUT is a full replace).
+type SavingsViewInput struct {
+	Name        string               `json:"name"`
+	Description *string              `json:"description"`
+	Status      string               `json:"status"`
+	Filter      SavingsFindingFilter `json:"filter"`
+	Sort        SavingsFindingSort   `json:"sort"`
+}
+
+// SavingsView is a saved view over the savings findings list.
+type SavingsView struct {
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Description     *string              `json:"description"`
+	Status          string               `json:"status"`
+	Filter          SavingsFindingFilter `json:"filter"`
+	Sort            SavingsFindingSort   `json:"sort"`
+	CreatedByUserID *string              `json:"createdByUserId"`
+	CreatedAt       string               `json:"createdAt"`
+	UpdatedAt       string               `json:"updatedAt"`
+}
+
 /* ------------------------------- cost reports ------------------------------ */
 
 // CostDateRange is a tagged union: a relative preset or an absolute span.
 //
 // It marshals to exactly the branch its Kind names, because the server's schema
-// is strict — an absolute range carrying a stray `preset` key is rejected.
+// is strict: an absolute range carrying a stray `preset` key is rejected.
 type CostDateRange struct {
 	Kind   string  `json:"kind"`
 	Preset *string `json:"preset,omitempty"`
@@ -241,22 +351,39 @@ func (r CostDateRange) MarshalJSON() ([]byte, error) {
 // CostGraphConfig is the chart definition shared by reports and dashboard
 // cards.
 type CostGraphConfig struct {
-	Version               int64         `json:"version"`
-	ChartType             string        `json:"chartType"`
-	Binning               string        `json:"binning"`
-	DateRange             CostDateRange `json:"dateRange"`
-	GroupBy               string        `json:"groupBy"`
-	GroupByTagKey         *string       `json:"groupByTagKey,omitempty"`
-	Filters               []CostFilter  `json:"filters"`
-	SavedFilterID         *string       `json:"savedFilterId,omitempty"`
-	TopN                  int64         `json:"topN"`
-	ComparePreviousPeriod bool          `json:"comparePreviousPeriod"`
-	ShowForecast          bool          `json:"showForecast"`
-	ScenarioModelID       *string       `json:"scenarioModelId,omitempty"`
-	CostBasis             *string       `json:"costBasis,omitempty"`
-	UnitCostMetricID      *string       `json:"unitCostMetricId,omitempty"`
-	UnitCostMode          *string       `json:"unitCostMode,omitempty"`
-	Adjusted              *bool         `json:"adjusted,omitempty"`
+	Version               int64                 `json:"version"`
+	ChartType             string                `json:"chartType"`
+	Binning               string                `json:"binning"`
+	DateRange             CostDateRange         `json:"dateRange"`
+	GroupBy               string                `json:"groupBy"`
+	GroupByTagKey         *string               `json:"groupByTagKey,omitempty"`
+	Filters               []CostFilter          `json:"filters"`
+	SavedFilterID         *string               `json:"savedFilterId,omitempty"`
+	TopN                  int64                 `json:"topN"`
+	ComparePreviousPeriod bool                  `json:"comparePreviousPeriod"`
+	ShowForecast          bool                  `json:"showForecast"`
+	ScenarioModelID       *string               `json:"scenarioModelId,omitempty"`
+	CostBasis             *string               `json:"costBasis,omitempty"`
+	UnitCostMetricID      *string               `json:"unitCostMetricId,omitempty"`
+	UnitCostMode          *string               `json:"unitCostMode,omitempty"`
+	UnitCostScale         *int64                `json:"unitCostScale,omitempty"`
+	UnitCostUsageUnit     *string               `json:"unitCostUsageUnit,omitempty"`
+	UnitCostLabelFilters  []UnitCostLabelFilter `json:"unitCostLabelFilters,omitempty"`
+	UnitCostGroupByLabel  *string               `json:"unitCostGroupByLabel,omitempty"`
+	Adjusted              *bool                 `json:"adjusted,omitempty"`
+	// The display options. All omitempty: the server omits each when it holds
+	// its default (cost, no unit, not cumulative), and sending them only when
+	// set keeps a config that never mentions them byte-identical on the wire.
+	Measure    *string `json:"measure,omitempty"`
+	UsageUnit  *string `json:"usageUnit,omitempty"`
+	Cumulative *bool   `json:"cumulative,omitempty"`
+	// The axis options, omitempty for the same reason: a config that never
+	// mentions them is byte-identical on the wire. XAxis absent is the date
+	// axis; ComparisonStyle absent is the dashed comparison line.
+	XAxis           *string `json:"xAxis,omitempty"`
+	XAxisTagKey     *string `json:"xAxisTagKey,omitempty"`
+	SegmentByDate   *bool   `json:"segmentByDate,omitempty"`
+	ComparisonStyle *string `json:"comparisonStyle,omitempty"`
 }
 
 // CostReportInput is the POST/PUT body. FolderID is nullable so that moving a
@@ -279,6 +406,113 @@ type CostReport struct {
 	CreatedAt       string          `json:"createdAt"`
 	UpdatedAt       string          `json:"updatedAt"`
 	Placements      []Placement     `json:"placements,omitempty"`
+}
+
+/* ----------------------- Kubernetes efficiency reports ---------------------- */
+
+// KubernetesEfficiencyConfig is a saved efficiency report's definition. The
+// filter dimensions are narrower than a cost report's (account, region, tag).
+type KubernetesEfficiencyConfig struct {
+	Version         int64         `json:"version"`
+	DateRange       CostDateRange `json:"dateRange"`
+	Granularity     string        `json:"granularity"`
+	Filters         []CostFilter  `json:"filters"`
+	GroupBy         string        `json:"groupBy"`
+	GroupByLabelKey *string       `json:"groupByLabelKey,omitempty"`
+	Categories      []string      `json:"categories,omitempty"`
+	Idle            string        `json:"idle"`
+	Basis           string        `json:"basis"`
+}
+
+// KubernetesEfficiencyReportInput is the POST/PUT body. FolderID is sent as an
+// explicit null to move a report out of its folder.
+type KubernetesEfficiencyReportInput struct {
+	Name        string                     `json:"name"`
+	Description *string                    `json:"description,omitempty"`
+	Config      KubernetesEfficiencyConfig `json:"config"`
+	FolderID    *string                    `json:"folderId"`
+}
+
+// KubernetesEfficiencyReport is a saved report.
+type KubernetesEfficiencyReport struct {
+	ID              string                     `json:"id"`
+	Name            string                     `json:"name"`
+	Description     *string                    `json:"description"`
+	Config          KubernetesEfficiencyConfig `json:"config"`
+	FolderID        *string                    `json:"folderId"`
+	CreatedByUserID *string                    `json:"createdByUserId"`
+	CreatedAt       string                     `json:"createdAt"`
+	UpdatedAt       string                     `json:"updatedAt"`
+}
+
+/* ----------------------------- resource reports ---------------------------- */
+
+// ResourceReportTypeRef names one resource type with its plugin, since type
+// ids repeat across plugins.
+type ResourceReportTypeRef struct {
+	PluginID       string `json:"pluginId"`
+	ResourceTypeID string `json:"resourceTypeId"`
+}
+
+// ResourceReportTagFilter is one tag condition: provider tags, or virtual tags
+// read from the resource's own cost rows.
+type ResourceReportTagFilter struct {
+	Source string   `json:"source"`
+	Key    string   `json:"key"`
+	Op     string   `json:"op"`
+	Values []string `json:"values"`
+}
+
+// ResourceReportFilters is what a report selects. Every list is sent as `[]`
+// rather than null: the server's schema is strict and has no "absent" list.
+type ResourceReportFilters struct {
+	PluginIDs     []string                  `json:"pluginIds"`
+	AccountIDs    []string                  `json:"accountIds"`
+	ResourceTypes []ResourceReportTypeRef   `json:"resourceTypes"`
+	Regions       []string                  `json:"regions"`
+	Statuses      []string                  `json:"statuses"`
+	Tags          []ResourceReportTagFilter `json:"tags"`
+	NameContains  *string                   `json:"nameContains"`
+	CreatedFrom   *string                   `json:"createdFrom"`
+	CreatedTo     *string                   `json:"createdTo"`
+}
+
+// ResourceReportSort is the saved sort; null on the wire sorts by name.
+type ResourceReportSort struct {
+	Column    string `json:"column"`
+	Direction string `json:"direction"`
+}
+
+// ResourceReportConfig is a report's saved definition.
+type ResourceReportConfig struct {
+	Version   int64                 `json:"version"`
+	Filters   ResourceReportFilters `json:"filters"`
+	Columns   []string              `json:"columns"`
+	Sort      *ResourceReportSort   `json:"sort"`
+	CostRange CostDateRange         `json:"costRange"`
+	CostBasis string                `json:"costBasis"`
+	PageSize  int64                 `json:"pageSize"`
+}
+
+// ResourceReportInput is the POST/PUT body. `folderId` is always sent, null
+// meaning "top level", so clearing the attribute really moves the report.
+type ResourceReportInput struct {
+	Name        string               `json:"name"`
+	Description *string              `json:"description,omitempty"`
+	Config      ResourceReportConfig `json:"config"`
+	FolderID    *string              `json:"folderId"`
+}
+
+// ResourceReport is a saved inventory report.
+type ResourceReport struct {
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Description     *string              `json:"description"`
+	Config          ResourceReportConfig `json:"config"`
+	FolderID        *string              `json:"folderId"`
+	CreatedByUserID *string              `json:"createdByUserId"`
+	CreatedAt       string               `json:"createdAt"`
+	UpdatedAt       string               `json:"updatedAt"`
 }
 
 /* --------------------------- cost report folders --------------------------- */
@@ -315,31 +549,34 @@ type CostAlertInput struct {
 	ThresholdAmountCents *int64       `json:"thresholdAmountCents"`
 	Direction            string       `json:"direction"`
 	Enabled              bool         `json:"enabled"`
+	// EmailRecipients is nil to leave the stored list unchanged.
+	EmailRecipients *AlertEmailRecipients `json:"emailRecipients,omitempty"`
 }
 
 // CostAlert is a stored change-based alert.
 type CostAlert struct {
-	ID                   string       `json:"id"`
-	Name                 string       `json:"name"`
-	Filters              []CostFilter `json:"filters"`
-	GroupBy              *string      `json:"groupBy"`
-	GroupByTagKey        *string      `json:"groupByTagKey"`
-	Cadence              string       `json:"cadence"`
-	ThresholdPercent     *int64       `json:"thresholdPercent"`
-	ThresholdAmountCents *int64       `json:"thresholdAmountCents"`
-	Direction            string       `json:"direction"`
-	Enabled              bool         `json:"enabled"`
-	LastEvaluatedAt      *string      `json:"lastEvaluatedAt"`
-	LastFiredAt          *string      `json:"lastFiredAt"`
-	CreatedAt            string       `json:"createdAt"`
-	UpdatedAt            string       `json:"updatedAt"`
+	ID                   string                `json:"id"`
+	Name                 string                `json:"name"`
+	Filters              []CostFilter          `json:"filters"`
+	GroupBy              *string               `json:"groupBy"`
+	GroupByTagKey        *string               `json:"groupByTagKey"`
+	Cadence              string                `json:"cadence"`
+	ThresholdPercent     *int64                `json:"thresholdPercent"`
+	ThresholdAmountCents *int64                `json:"thresholdAmountCents"`
+	Direction            string                `json:"direction"`
+	Enabled              bool                  `json:"enabled"`
+	LastEvaluatedAt      *string               `json:"lastEvaluatedAt"`
+	LastFiredAt          *string               `json:"lastFiredAt"`
+	EmailRecipients      *AlertEmailRecipients `json:"emailRecipients"`
+	CreatedAt            string                `json:"createdAt"`
+	UpdatedAt            string                `json:"updatedAt"`
 }
 
 /* ----------------------------- scenario models ----------------------------- */
 
 // CostScenarioAdjustment is one what-if line in a scenario model.
 //
-// ID is caller-assigned and must be stable across updates — the server does not
+// ID is caller-assigned and must be stable across updates: the server does not
 // mint it. The provider derives it from the adjustment's label so a practitioner
 // never has to invent one, and reordering the list does not renumber anything.
 //
@@ -381,7 +618,7 @@ type CostScenarioModel struct {
 
 /* ------------------------------- billing rules ----------------------------- */
 
-// BillingRuleMatch is a superset of AllocationRuleMatch — it can also match on
+// BillingRuleMatch is a superset of AllocationRuleMatch: it can also match on
 // charge type.
 type BillingRuleMatch struct {
 	TagKey     *string `json:"tagKey,omitempty"`
@@ -403,6 +640,21 @@ type BillingRuleAdjustment struct {
 	Period     *string  `json:"period"`
 	TargetKind *string  `json:"targetKind"`
 	TargetID   *string  `json:"targetId"`
+	// Tiers, TierMode and TierScope are `tiered` only: rate tiers on a
+	// managed account's monthly spend. Invoice-only; never moves the org's
+	// own graphs.
+	Tiers     []BillingRuleTier `json:"tiers"`
+	TierMode  *string           `json:"tierMode"`
+	TierScope *string           `json:"tierScope"`
+	// Expression is `expression` only: a sandboxed pricing expression the
+	// server parses and type-checks on save.
+	Expression *string `json:"expression"`
+}
+
+// BillingRuleTier is one rate tier; UpTo is nil on the open-ended last tier.
+type BillingRuleTier struct {
+	UpTo    *float64 `json:"upTo"`
+	Percent float64  `json:"percent"`
 }
 
 // BillingRuleInput is the POST/PUT body.
@@ -413,24 +665,96 @@ type BillingRuleInput struct {
 	Priority    int64                 `json:"priority"`
 	Match       BillingRuleMatch      `json:"match"`
 	Adjustment  BillingRuleAdjustment `json:"adjustment"`
+	// ManagedAccountIDs limits a tiered or expression rule to these customers;
+	// empty means every customer. Always sent, so removing the attribute
+	// widens the rule back to everyone rather than leaving it as it was.
+	ManagedAccountIDs []string `json:"managedAccountIds"`
 }
 
 // BillingRule is a stored restatement rule.
 type BillingRule struct {
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Description *string               `json:"description"`
-	Enabled     bool                  `json:"enabled"`
-	Priority    int64                 `json:"priority"`
-	Match       BillingRuleMatch      `json:"match"`
-	Adjustment  BillingRuleAdjustment `json:"adjustment"`
-	CreatedAt   string                `json:"createdAt"`
-	UpdatedAt   string                `json:"updatedAt"`
+	ID                string                `json:"id"`
+	Name              string                `json:"name"`
+	Description       *string               `json:"description"`
+	Enabled           bool                  `json:"enabled"`
+	Priority          int64                 `json:"priority"`
+	Match             BillingRuleMatch      `json:"match"`
+	Adjustment        BillingRuleAdjustment `json:"adjustment"`
+	ManagedAccountIDs []string              `json:"managedAccountIds"`
+	CreatedAt         string                `json:"createdAt"`
+	UpdatedAt         string                `json:"updatedAt"`
+}
+
+/* ------------------------------- virtual tags ------------------------------ */
+
+// VirtualTagSource is one provider tag key a `tag` rule reads from, first
+// present key wins.
+type VirtualTagSource struct {
+	TagKey      string  `json:"tagKey"`
+	ValuePrefix *string `json:"valuePrefix"`
+	Query       *string `json:"query"`
+}
+
+// VirtualTagAllocation is one share of a split. `split` sets Percent,
+// `metric_split` sets MetricID.
+type VirtualTagAllocation struct {
+	Value    string   `json:"value"`
+	Percent  *float64 `json:"percent"`
+	MetricID *string  `json:"metricId"`
+}
+
+// VirtualTagRule is one ordered rule. Flat rather than a union, like billing
+// rule adjustments: every field is always present on the wire, and Sources and
+// Allocations are sent as explicit (possibly empty) arrays.
+type VirtualTagRule struct {
+	Query          string                 `json:"query"`
+	Description    *string                `json:"description"`
+	StartsOn       *string                `json:"startsOn"`
+	EndsOn         *string                `json:"endsOn"`
+	Kind           string                 `json:"kind"`
+	Value          *string                `json:"value"`
+	Sources        []VirtualTagSource     `json:"sources"`
+	ValueTransform string                 `json:"valueTransform"`
+	Allocations    []VirtualTagAllocation `json:"allocations"`
+}
+
+// VirtualTagInput is the POST/PUT body. PUT is a full replace, rule order
+// included, and Key must equal the stored key (it is immutable).
+type VirtualTagInput struct {
+	Key          string           `json:"key"`
+	Name         string           `json:"name"`
+	Description  *string          `json:"description"`
+	DefaultValue *string          `json:"defaultValue"`
+	Rules        []VirtualTagRule `json:"rules"`
+}
+
+// VirtualTagStatus is where the background evaluation over stored history
+// stands. The server's `stats` (spend per rule, top values) is deliberately not
+// decoded: it moves with every collection run, so it would read as constant
+// drift, and it is a report rather than configuration.
+type VirtualTagStatus struct {
+	State       string  `json:"state"`
+	ProcessedAt *string `json:"processedAt"`
+	Error       *string `json:"error"`
+}
+
+// VirtualTag is a stored virtual tag.
+type VirtualTag struct {
+	ID              string           `json:"id"`
+	Key             string           `json:"key"`
+	Name            string           `json:"name"`
+	Description     *string          `json:"description"`
+	DefaultValue    *string          `json:"defaultValue"`
+	Rules           []VirtualTagRule `json:"rules"`
+	Status          VirtualTagStatus `json:"status"`
+	CreatedByUserID *string          `json:"createdByUserId"`
+	CreatedAt       string           `json:"createdAt"`
+	UpdatedAt       string           `json:"updatedAt"`
 }
 
 /* ------------------------------- cost exports ------------------------------ */
 
-// CostExportDestination is a tagged union over the two delivery targets.
+// CostExportDestination is a tagged union over the three delivery targets.
 //
 // The HTTP branch's URL is a write-only credential and lives on the input, not
 // here; UrlHint is the server's redacted echo of it and is recomputed whenever
@@ -449,6 +773,37 @@ type CostExportDestination struct {
 	// http
 	Method  *string `json:"method,omitempty"`
 	URLHint *string `json:"urlHint,omitempty"`
+
+	// warehouse: a table in a connected Snowflake or Databricks account. The
+	// account's own credentials load the rows, so there is no secret here.
+	PluginID  *string           `json:"pluginId,omitempty"`
+	AccountID *string           `json:"accountId,omitempty"`
+	Target    map[string]string `json:"target,omitempty"`
+}
+
+// costExportS3Destination and costExportHTTPDestination are the wire shapes of
+// the two branches; MarshalJSON picks one so no other branch's keys leak in.
+type costExportS3Destination struct {
+	Kind           string  `json:"kind"`
+	Bucket         *string `json:"bucket,omitempty"`
+	Prefix         *string `json:"prefix,omitempty"`
+	Region         *string `json:"region,omitempty"`
+	Endpoint       *string `json:"endpoint,omitempty"`
+	ForcePathStyle *bool   `json:"forcePathStyle,omitempty"`
+}
+
+type costExportHTTPDestination struct {
+	Kind   string  `json:"kind"`
+	Method *string `json:"method,omitempty"`
+}
+
+// costExportWarehouseDestination always sends `target`, even empty, because
+// the server's schema requires the key.
+type costExportWarehouseDestination struct {
+	Kind      string            `json:"kind"`
+	PluginID  *string           `json:"pluginId,omitempty"`
+	AccountID *string           `json:"accountId,omitempty"`
+	Target    map[string]string `json:"target"`
 }
 
 // MarshalJSON emits only the keys belonging to the named branch, since the
@@ -456,53 +811,54 @@ type CostExportDestination struct {
 func (d CostExportDestination) MarshalJSON() ([]byte, error) {
 	switch d.Kind {
 	case "s3":
-		out := map[string]any{"kind": "s3"}
-		if d.Bucket != nil {
-			out["bucket"] = *d.Bucket
-		}
-		if d.Prefix != nil {
-			out["prefix"] = *d.Prefix
-		}
-		if d.Region != nil {
-			out["region"] = *d.Region
-		}
-		if d.Endpoint != nil {
-			out["endpoint"] = *d.Endpoint
-		}
-		if d.ForcePathStyle != nil {
-			out["forcePathStyle"] = *d.ForcePathStyle
-		}
-		return json.Marshal(out)
+		return json.Marshal(costExportS3Destination{
+			Kind:           "s3",
+			Bucket:         d.Bucket,
+			Prefix:         d.Prefix,
+			Region:         d.Region,
+			Endpoint:       d.Endpoint,
+			ForcePathStyle: d.ForcePathStyle,
+		})
 	case "http":
-		out := map[string]any{"kind": "http"}
-		if d.Method != nil {
-			out["method"] = *d.Method
+		return json.Marshal(costExportHTTPDestination{Kind: "http", Method: d.Method})
+	case "warehouse":
+		target := d.Target
+		if target == nil {
+			target = map[string]string{}
 		}
-		return json.Marshal(out)
+		return json.Marshal(costExportWarehouseDestination{
+			Kind:      "warehouse",
+			PluginID:  d.PluginID,
+			AccountID: d.AccountID,
+			Target:    target,
+		})
 	default:
-		return nil, fmt.Errorf("unknown export destination kind %q (want \"s3\" or \"http\")", d.Kind)
+		return nil, fmt.Errorf("unknown export destination kind %q (want \"s3\", \"http\" or \"warehouse\")", d.Kind)
 	}
 }
 
 // CostExportQuery selects the rows an export emits.
 type CostExportQuery struct {
-	Version     int64        `json:"version"`
-	Dimensions  []string     `json:"dimensions"`
-	TagKeys     []string     `json:"tagKeys"`
-	Filters     []CostFilter `json:"filters"`
-	ChargeTypes []string     `json:"chargeTypes,omitempty"`
-	CostBasis   *string      `json:"costBasis,omitempty"`
+	Version    int64    `json:"version"`
+	Dimensions []string `json:"dimensions"`
+	TagKeys    []string `json:"tagKeys"`
+	// VirtualTagKeys is optional on the wire; omitted means none.
+	VirtualTagKeys []string     `json:"virtualTagKeys,omitempty"`
+	Filters        []CostFilter `json:"filters"`
+	ChargeTypes    []string     `json:"chargeTypes,omitempty"`
+	CostBasis      *string      `json:"costBasis,omitempty"`
 }
 
 // CostExportInput is the POST/PUT body.
 //
 // AccessKeyID, SecretAccessKey and URL are write-only credentials. The server
-// never returns them, and omitting one on PUT means "keep the stored value" —
+// never returns them, and omitting one on PUT means "keep the stored value",
 // not "clear it". They are omitempty pointers so an unknown or unset credential
 // leaves the stored one intact rather than blanking it.
 type CostExportInput struct {
 	Name            string                `json:"name"`
 	Format          string                `json:"format"`
+	Schema          string                `json:"schema"`
 	Query           CostExportQuery       `json:"query"`
 	Cadence         string                `json:"cadence"`
 	Hour            int64                 `json:"hour"`
@@ -523,6 +879,7 @@ type CostExport struct {
 	ID              string                `json:"id"`
 	Name            string                `json:"name"`
 	Format          string                `json:"format"`
+	Schema          string                `json:"schema"`
 	Query           CostExportQuery       `json:"query"`
 	Cadence         string                `json:"cadence"`
 	Hour            int64                 `json:"hour"`
@@ -560,6 +917,46 @@ type BusinessMetricInput struct {
 	Currency      *string      `json:"currency,omitempty"`
 	CostScope     []CostFilter `json:"costScope"`
 	SavedFilterID *string      `json:"savedFilterId,omitempty"`
+	// Sent as [] rather than omitted when empty: PUT is a full replace, so an
+	// omitted list would leave the server's previous mappings in place.
+	LabelMappings []BusinessMetricLabelMapping `json:"labelMappings"`
+	Thresholds    []UnitCostThreshold          `json:"thresholds"`
+}
+
+// UnitCostLabelFilter narrows a unit-cost graph to some values of a metric
+// label: `in` keeps them, `not_in` drops them.
+type UnitCostLabelFilter struct {
+	Key    string   `json:"key"`
+	Op     string   `json:"op"`
+	Values []string `json:"values"`
+}
+
+// BusinessMetricLabelTarget names where a label's values live on the cost
+// side: a cost dimension (Dimension, plus TagKey for keyed dimensions), or the
+// cost centres (Kind "cost_centre", no other fields).
+type BusinessMetricLabelTarget struct {
+	Kind      string  `json:"kind"`
+	Dimension *string `json:"dimension,omitempty"`
+	TagKey    *string `json:"tagKey,omitempty"`
+}
+
+// BusinessMetricLabelMapping joins a value label to a cost dimension, so unit
+// cost and margin can be computed per label value.
+type BusinessMetricLabelMapping struct {
+	Label  string                    `json:"label"`
+	Target BusinessMetricLabelTarget `json:"target"`
+}
+
+// UnitCostThreshold is a standing limit on a metric's unit cost or margin.
+// The server always returns WindowDays (defaulting it to 7) and omits Scale
+// when it is 1.
+type UnitCostThreshold struct {
+	Mode         string  `json:"mode"`
+	Direction    string  `json:"direction"`
+	Value        float64 `json:"value"`
+	Scale        *int64  `json:"scale,omitempty"`
+	GroupByLabel *string `json:"groupByLabel,omitempty"`
+	WindowDays   *int64  `json:"windowDays,omitempty"`
 }
 
 // BusinessMetricCoverage summarises which days carry a reported value. Read
@@ -577,19 +974,61 @@ type BusinessMetricCoverage struct {
 // time series pushed continuously by a job, not configuration, and a Terraform
 // resource that owned them would plan a diff every time the business changed.
 type BusinessMetric struct {
-	ID              string                  `json:"id"`
-	Key             string                  `json:"key"`
-	Name            string                  `json:"name"`
-	Unit            string                  `json:"unit"`
-	Description     *string                 `json:"description"`
-	Kind            string                  `json:"kind"`
-	Currency        *string                 `json:"currency"`
-	CostScope       []CostFilter            `json:"costScope"`
-	SavedFilterID   *string                 `json:"savedFilterId"`
-	CreatedByUserID *string                 `json:"createdByUserId"`
-	CreatedAt       string                  `json:"createdAt"`
-	UpdatedAt       string                  `json:"updatedAt"`
-	Coverage        *BusinessMetricCoverage `json:"coverage"`
+	ID              string                       `json:"id"`
+	Key             string                       `json:"key"`
+	Name            string                       `json:"name"`
+	Unit            string                       `json:"unit"`
+	Description     *string                      `json:"description"`
+	Kind            string                       `json:"kind"`
+	Currency        *string                      `json:"currency"`
+	CostScope       []CostFilter                 `json:"costScope"`
+	SavedFilterID   *string                      `json:"savedFilterId"`
+	LabelMappings   []BusinessMetricLabelMapping `json:"labelMappings"`
+	Thresholds      []UnitCostThreshold          `json:"thresholds"`
+	CreatedByUserID *string                      `json:"createdByUserId"`
+	CreatedAt       string                       `json:"createdAt"`
+	UpdatedAt       string                       `json:"updatedAt"`
+	Coverage        *BusinessMetricCoverage      `json:"coverage"`
+}
+
+/* ------------------------- business metric importers ----------------------- */
+
+// BusinessMetricImporterInput is the PUT /business-metrics/{id}/importer body.
+// A full replace: the server defaults whatever is omitted, so the provider
+// always sends every field.
+type BusinessMetricImporterInput struct {
+	AccountID    string            `json:"accountId"`
+	Params       map[string]string `json:"params"`
+	Schedule     string            `json:"schedule"`
+	BackfillDays int64             `json:"backfillDays"`
+	Timezone     string            `json:"timezone"`
+	Aggregation  string            `json:"aggregation"`
+	Enabled      bool              `json:"enabled"`
+}
+
+// BusinessMetricImporter is the scheduled importer feeding one business
+// metric from a connected account. One per metric.
+type BusinessMetricImporter struct {
+	ID                  string            `json:"id"`
+	MetricID            string            `json:"metricId"`
+	AccountID           string            `json:"accountId"`
+	AccountName         *string           `json:"accountName"`
+	PluginID            *string           `json:"pluginId"`
+	SourceLabel         *string           `json:"sourceLabel"`
+	Params              map[string]string `json:"params"`
+	Schedule            string            `json:"schedule"`
+	BackfillDays        int64             `json:"backfillDays"`
+	Timezone            string            `json:"timezone"`
+	Aggregation         string            `json:"aggregation"`
+	Enabled             bool              `json:"enabled"`
+	NextRunAt           *string           `json:"nextRunAt"`
+	LastRunAt           *string           `json:"lastRunAt"`
+	LastStatus          *string           `json:"lastStatus"`
+	LastError           *string           `json:"lastError"`
+	ConsecutiveFailures int64             `json:"consecutiveFailures"`
+	CreatedByUserID     *string           `json:"createdByUserId"`
+	CreatedAt           string            `json:"createdAt"`
+	UpdatedAt           string            `json:"updatedAt"`
 }
 
 /* ----------------------------- cost annotations ---------------------------- */
@@ -609,19 +1048,59 @@ type CostAnnotationInput struct {
 
 // CostAnnotation is a note pinned to a date or a span on cost charts.
 //
-// CostAnomalyID is read-only and has no counterpart on the input: it is set when
-// somebody acknowledges a detected anomaly with an explanation, which mints the
-// annotation server-side. An annotation Terraform created is always null there.
+// CostAnomalyID and BudgetAlert are read-only and have no counterpart on the
+// input: they are set when somebody explains a detected anomaly or a fired
+// budget alert, which mints the annotation server-side. An annotation Terraform
+// created is always null in both.
 type CostAnnotation struct {
-	ID              string  `json:"id"`
-	StartDate       string  `json:"startDate"`
-	EndDate         *string `json:"endDate"`
-	Text            string  `json:"text"`
-	CostReportID    *string `json:"costReportId"`
-	CostAnomalyID   *string `json:"costAnomalyId"`
-	CreatedByUserID *string `json:"createdByUserId"`
-	CreatedAt       string  `json:"createdAt"`
-	UpdatedAt       string  `json:"updatedAt"`
+	ID              string                     `json:"id"`
+	StartDate       string                     `json:"startDate"`
+	EndDate         *string                    `json:"endDate"`
+	Text            string                     `json:"text"`
+	CostReportID    *string                    `json:"costReportId"`
+	CostAnomalyID   *string                    `json:"costAnomalyId"`
+	BudgetAlert     *CostAnnotationBudgetAlert `json:"budgetAlert"`
+	CreatedByUserID *string                    `json:"createdByUserId"`
+	CreatedAt       string                     `json:"createdAt"`
+	UpdatedAt       string                     `json:"updatedAt"`
+}
+
+// CostAnnotationBudgetAlert names the fired budget alert a note explains.
+type CostAnnotationBudgetAlert struct {
+	BudgetID string `json:"budgetId"`
+	EventID  string `json:"eventId"`
+}
+
+/* ----------------------------- report forecasts ---------------------------- */
+
+// CostForecastInput is the POST/PUT body for a named forecast on a report.
+//
+// Description and DriverMetricID are explicit nulls rather than omissions: a
+// null clears them, so the PUT is a full replacement. IsDefault is always sent,
+// because on update an absent value keeps the server's current setting, and
+// Terraform has to be able to turn the default off.
+type CostForecastInput struct {
+	Name             string   `json:"name"`
+	Description      *string  `json:"description"`
+	ScenarioModelIDs []string `json:"scenarioModelIds"`
+	DriverMetricID   *string  `json:"driverMetricId"`
+	IsDefault        bool     `json:"isDefault"`
+}
+
+// CostForecast is a named forecast: a baseline (the trend, or a driver
+// metric's forecasted values times the projected unit cost) with scenario
+// models applied in order.
+type CostForecast struct {
+	ID               string   `json:"id"`
+	ReportID         string   `json:"reportId"`
+	Name             string   `json:"name"`
+	Description      *string  `json:"description"`
+	ScenarioModelIDs []string `json:"scenarioModelIds"`
+	DriverMetricID   *string  `json:"driverMetricId"`
+	IsDefault        bool     `json:"isDefault"`
+	CreatedByUserID  *string  `json:"createdByUserId"`
+	CreatedAt        string   `json:"createdAt"`
+	UpdatedAt        string   `json:"updatedAt"`
 }
 
 /* -------------------------- report notifications --------------------------- */
@@ -666,6 +1145,110 @@ type ReportNotification struct {
 	UpdatedAt       string   `json:"updatedAt"`
 }
 
+// DashboardNotificationInput is the POST/PUT body for a dashboard's delivery
+// schedule, a full replace like ReportNotificationInput, which it mirrors.
+//
+// AttachPDF is an omitempty pointer because the server treats an absent key as
+// true. The provider always sets it, so the configured value is explicit.
+type DashboardNotificationInput struct {
+	Cadence         string   `json:"cadence"`
+	SendDay         *int64   `json:"sendDay,omitempty"`
+	SendDayOfMonth  *int64   `json:"sendDayOfMonth,omitempty"`
+	Hour            int64    `json:"hour"`
+	Timezone        string   `json:"timezone"`
+	SlackChannelIDs []string `json:"slackChannelIds"`
+	TeamsWebhookIDs []string `json:"teamsWebhookIds"`
+	EmailRecipients []string `json:"emailRecipients"`
+	Enabled         bool     `json:"enabled"`
+	AttachPDF       *bool    `json:"attachPdf,omitempty"`
+}
+
+// DashboardNotification is a stored delivery schedule for one dashboard,
+// rendered as a PDF.
+type DashboardNotification struct {
+	ID              string   `json:"id"`
+	DashboardID     string   `json:"dashboardId"`
+	Cadence         string   `json:"cadence"`
+	SendDay         int64    `json:"sendDay"`
+	SendDayOfMonth  int64    `json:"sendDayOfMonth"`
+	Hour            int64    `json:"hour"`
+	Timezone        string   `json:"timezone"`
+	SlackChannelIDs []string `json:"slackChannelIds"`
+	TeamsWebhookIDs []string `json:"teamsWebhookIds"`
+	EmailRecipients []string `json:"emailRecipients"`
+	Enabled         bool     `json:"enabled"`
+	AttachPDF       bool     `json:"attachPdf"`
+	NextSendAt      *string  `json:"nextSendAt"`
+	LastSentAt      *string  `json:"lastSentAt"`
+	LastStatus      *string  `json:"lastStatus"`
+	LastError       *string  `json:"lastError"`
+	CreatedByUserID *string  `json:"createdByUserId"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
+}
+
+/* ------------------------------- cost canvases ------------------------------ */
+
+// CostCanvasInput is the POST/PUT body for a cost canvas, a full replace.
+//
+// Spec is carried as raw JSON rather than as typed blocks. It is a tagged union
+// of block kinds whose chart config is itself an open JSON object, the server
+// validates it strictly, and the Terraform resource exposes it as a JSON
+// string; decoding it into Go types here would only add a second place for the
+// shape to drift. Description follows convention 1: omitted stores null.
+type CostCanvasInput struct {
+	Name        string          `json:"name"`
+	Description *string         `json:"description,omitempty"`
+	Spec        json.RawMessage `json:"spec"`
+}
+
+// CostCanvasPlacement is one dashboard widget that embeds a canvas.
+type CostCanvasPlacement struct {
+	WidgetID      string `json:"widgetId"`
+	DashboardID   string `json:"dashboardId"`
+	DashboardName string `json:"dashboardName"`
+}
+
+// CostCanvas is a stored canvas. The spec holds queries, never figures, so
+// reading it back does not change as spend changes.
+type CostCanvas struct {
+	ID              string                `json:"id"`
+	Name            string                `json:"name"`
+	Description     *string               `json:"description"`
+	Spec            json.RawMessage       `json:"spec"`
+	Prompt          *string               `json:"prompt"`
+	ConversationID  *string               `json:"conversationId"`
+	CreatedByUserID *string               `json:"createdByUserId"`
+	CreatedAt       string                `json:"createdAt"`
+	UpdatedAt       string                `json:"updatedAt"`
+	Placements      []CostCanvasPlacement `json:"placements"`
+}
+
+// CostCanvasNotification is a stored delivery schedule for one canvas. It is
+// written with DashboardNotificationInput; only the parent id differs on the
+// way back.
+type CostCanvasNotification struct {
+	ID              string   `json:"id"`
+	CostCanvasID    string   `json:"costCanvasId"`
+	Cadence         string   `json:"cadence"`
+	SendDay         int64    `json:"sendDay"`
+	SendDayOfMonth  int64    `json:"sendDayOfMonth"`
+	Hour            int64    `json:"hour"`
+	Timezone        string   `json:"timezone"`
+	SlackChannelIDs []string `json:"slackChannelIds"`
+	TeamsWebhookIDs []string `json:"teamsWebhookIds"`
+	EmailRecipients []string `json:"emailRecipients"`
+	Enabled         bool     `json:"enabled"`
+	AttachPDF       bool     `json:"attachPdf"`
+	NextSendAt      *string  `json:"nextSendAt"`
+	LastSentAt      *string  `json:"lastSentAt"`
+	LastStatus      *string  `json:"lastStatus"`
+	LastError       *string  `json:"lastError"`
+	CreatedByUserID *string  `json:"createdByUserId"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
+}
+
 /* ------------------------------ cost settings ------------------------------ */
 
 // CostAnomalySettings is the org singleton tuning spike detection. Every field
@@ -676,10 +1259,68 @@ type CostAnomalySettings struct {
 	NewSourceMinCents int64   `json:"newSourceMinCents"`
 	SMSAlerts         string  `json:"smsAlerts"`
 
+	// FeedbackTuning is optional on PUT, where omitting it keeps the stored
+	// value, and always present on a read. It is a pointer with omitempty so a
+	// caller that has no opinion (the zero struct) does not switch it off.
+	FeedbackTuning *bool `json:"feedbackTuning,omitempty"`
+
 	// SMSConfigured is derived and returned on GET only; the PUT schema is
 	// strict, so it must never be sent back. Its json tag has omitempty and the
 	// input path builds a fresh struct rather than echoing this one.
 	SMSConfigured *bool `json:"smsConfigured,omitempty"`
+
+	// EmailRecipients is nil on a write to leave the stored list unchanged;
+	// the view returned by GET and PUT always carries it.
+	EmailRecipients *AlertEmailRecipients `json:"emailRecipients,omitempty"`
+}
+
+/* --------------------------- anomaly suppressions -------------------------- */
+
+// CostAnomalySuppressionInput is the POST/PUT body. PUT replaces the whole
+// object.
+//
+// TagKey and StartsOn are omitempty because the server reads an absent key as
+// "not applicable" (a non-tag scope) or "the anchor day" respectively. Reason
+// and Note are explicit nulls rather than omissions: PUT is a full replace, so
+// null is how a previously stored reason or note is cleared.
+type CostAnomalySuppressionInput struct {
+	Scope      string  `json:"scope"`
+	ScopeKey   string  `json:"scopeKey"`
+	TagKey     *string `json:"tagKey,omitempty"`
+	Recurrence string  `json:"recurrence"`
+	AnchorDay  string  `json:"anchorDay"`
+	StartsOn   *string `json:"startsOn,omitempty"`
+	ExpiresOn  string  `json:"expiresOn"`
+	Reason     *string `json:"reason"`
+	Note       *string `json:"note"`
+}
+
+// CostAnomalySuppression declares that spend in a scope is expected on a
+// pattern of days until an expiry. On a covered day detection sets the scope's
+// spend aside before judging the day, and a finding that only existed because
+// of it is stored as suppressed rather than alerted on.
+//
+// ScopeLabel, SourceAnomalyID, the creator fields, the timestamps, Active and
+// SuppressedCount are read-only and have no counterpart on the input.
+type CostAnomalySuppression struct {
+	ID              string  `json:"id"`
+	Scope           string  `json:"scope"`
+	ScopeKey        string  `json:"scopeKey"`
+	TagKey          *string `json:"tagKey"`
+	ScopeLabel      *string `json:"scopeLabel"`
+	Recurrence      string  `json:"recurrence"`
+	AnchorDay       string  `json:"anchorDay"`
+	StartsOn        string  `json:"startsOn"`
+	ExpiresOn       string  `json:"expiresOn"`
+	Reason          *string `json:"reason"`
+	Note            *string `json:"note"`
+	SourceAnomalyID *string `json:"sourceAnomalyId"`
+	CreatedByUserID *string `json:"createdByUserId"`
+	CreatedByName   *string `json:"createdByName"`
+	CreatedAt       string  `json:"createdAt"`
+	UpdatedAt       string  `json:"updatedAt"`
+	Active          bool    `json:"active"`
+	SuppressedCount int64   `json:"suppressedCount"`
 }
 
 // CostEfficiencySettings is the org singleton tuning the three efficiency
@@ -699,32 +1340,58 @@ type CostEfficiencySettings struct {
 	UnitCostWindowDays             int64   `json:"unitCostWindowDays"`
 	UnitCostMinReportedDays        int64   `json:"unitCostMinReportedDays"`
 	UnitCostMinSpendCents          int64   `json:"unitCostMinSpendCents"`
+
+	// EmailRecipients is nil on a write to leave the stored list unchanged.
+	EmailRecipients *AlertEmailRecipients `json:"emailRecipients,omitempty"`
 }
 
 /* --------------------------------- currency -------------------------------- */
 
-// CurrencySettings is the PUT body for the org's display currency. The pointer
-// has no omitempty: null is how conversion is turned off, and an absent key
-// would be a different request.
+// CurrencySettings is both the PUT body and its response for the org's
+// currency settings. DisplayCurrency has no omitempty: null is how conversion
+// is turned off, and an absent key would be a different request. AutoRates and
+// RateBasis are omitempty pointers on the way in because the server treats an
+// absent key as "keep the stored value"; the response always carries both.
 type CurrencySettings struct {
 	DisplayCurrency *string `json:"displayCurrency"`
+	AutoRates       *bool   `json:"autoRates,omitempty"`
+	RateBasis       *string `json:"rateBasis,omitempty"`
 }
 
-// CurrencyConfig is what GET /currency returns — the display currency plus the
-// whole stated rate table.
+// FxFeedStatus is the state of the automatic ECB reference-rate feed. It is
+// global (the same for every organization) and read-only.
+type FxFeedStatus struct {
+	Source           string   `json:"source"`
+	SourceName       string   `json:"sourceName"`
+	SourceURL        string   `json:"sourceUrl"`
+	LatestRateDate   *string  `json:"latestRateDate"`
+	EarliestRateDate *string  `json:"earliestRateDate"`
+	Currencies       []string `json:"currencies"`
+	LastSuccessAt    *string  `json:"lastSuccessAt"`
+	LastError        *string  `json:"lastError"`
+}
+
+// CurrencyConfig is what GET /currency returns: the settings, the whole stated
+// rate table, and the feed's state.
 type CurrencyConfig struct {
 	DisplayCurrency *string        `json:"displayCurrency"`
+	AutoRates       bool           `json:"autoRates"`
+	RateBasis       string         `json:"rateBasis"`
 	Rates           []ExchangeRate `json:"rates"`
+	Feed            FxFeedStatus   `json:"feed"`
 }
 
 // ExchangeRateInput is the upsert body. The route is keyed on
 // (fromCurrency, toCurrency, effectiveFrom): restating a rate for a day it
-// already covers replaces it rather than adding a second one.
+// already covers replaces it rather than adding a second one. EffectiveTo has
+// no omitempty: null is "open-ended", and sending it explicitly is what clears
+// an end date that was set before.
 type ExchangeRateInput struct {
-	FromCurrency  string `json:"fromCurrency"`
-	ToCurrency    string `json:"toCurrency"`
-	Rate          string `json:"rate"`
-	EffectiveFrom string `json:"effectiveFrom"`
+	FromCurrency  string  `json:"fromCurrency"`
+	ToCurrency    string  `json:"toCurrency"`
+	Rate          string  `json:"rate"`
+	EffectiveFrom string  `json:"effectiveFrom"`
+	EffectiveTo   *string `json:"effectiveTo"`
 }
 
 // ExchangeRate is one stated rate.
@@ -738,6 +1405,7 @@ type ExchangeRate struct {
 	ToCurrency    string  `json:"toCurrency"`
 	Rate          string  `json:"rate"`
 	EffectiveFrom string  `json:"effectiveFrom"`
+	EffectiveTo   *string `json:"effectiveTo"`
 	CreatedBy     *string `json:"createdBy"`
 	CreatedAt     string  `json:"createdAt"`
 	UpdatedAt     string  `json:"updatedAt"`
@@ -757,8 +1425,126 @@ type Account struct {
 
 // PluginSummary describes an available provider plugin. The listing also
 // carries the plugin's logo SVG and credential-field metadata, neither of which
-// belongs in Terraform state — the data source drops them.
+// belongs in Terraform state: the data source drops them.
 type PluginSummary struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
+}
+
+/* --------------------------- custom cost sources -------------------------- */
+
+// CustomCostSourceInput is the POST/PUT body. Description and DefaultCurrency
+// carry no omitempty: a null clears the field, which keeps the PUT a full
+// replacement, matching Terraform's model of the object.
+type CustomCostSourceInput struct {
+	Name            string  `json:"name"`
+	Description     *string `json:"description"`
+	DefaultCurrency *string `json:"defaultCurrency"`
+}
+
+// CustomCostSource is a named provider for uploaded spend. Uploads themselves
+// are data, not configuration, and are deliberately not modelled here.
+type CustomCostSource struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Description     *string `json:"description"`
+	DefaultCurrency *string `json:"defaultCurrency"`
+	PluginID        string  `json:"pluginId"`
+	UploadCount     int64   `json:"uploadCount"`
+	LastUploadAt    *string `json:"lastUploadAt"`
+	CreatedAt       string  `json:"createdAt"`
+	UpdatedAt       string  `json:"updatedAt"`
+}
+
+/* --------------------------- network flow reports -------------------------- */
+
+// NetworkFlowReportFilters narrows a network flow report. Every list is
+// omitempty: the server drops empty lists when it normalizes a config, so an
+// absent list and an empty one mean the same thing (no filter), and sending
+// neither keeps the body identical to what the server echoes back.
+type NetworkFlowReportFilters struct {
+	AccountIDs      []string `json:"accountIds,omitempty"`
+	Networks        []string `json:"networks,omitempty"`
+	Regions         []string `json:"regions,omitempty"`
+	Zones           []string `json:"zones,omitempty"`
+	SourceRefs      []string `json:"sourceRefs,omitempty"`
+	DestinationRefs []string `json:"destinationRefs,omitempty"`
+	Services        []string `json:"services,omitempty"`
+	ResourceTypes   []string `json:"resourceTypes,omitempty"`
+	TrafficClasses  []string `json:"trafficClasses,omitempty"`
+	Directions      []string `json:"directions,omitempty"`
+}
+
+// NetworkFlowReportConfig is the saved query: window, bucket size, grouping,
+// filters, what the report shows and how many rows it lists. TopN is omitted
+// when unset so a config without it round-trips unchanged.
+type NetworkFlowReportConfig struct {
+	Version     int64                    `json:"version"`
+	DateRange   CostDateRange            `json:"dateRange"`
+	Granularity string                   `json:"granularity"`
+	GroupBy     string                   `json:"groupBy"`
+	Filters     NetworkFlowReportFilters `json:"filters"`
+	Metric      string                   `json:"metric"`
+	TopN        *int64                   `json:"topN,omitempty"`
+}
+
+// NetworkFlowReportInput is the POST/PUT body. FolderID is sent as an explicit
+// null to move a report to the top level.
+type NetworkFlowReportInput struct {
+	Name        string                  `json:"name"`
+	Description *string                 `json:"description,omitempty"`
+	Config      NetworkFlowReportConfig `json:"config"`
+	FolderID    *string                 `json:"folderId"`
+}
+
+// NetworkFlowReport is a saved network flow report.
+type NetworkFlowReport struct {
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Description     *string                 `json:"description"`
+	Config          NetworkFlowReportConfig `json:"config"`
+	FolderID        *string                 `json:"folderId"`
+	CreatedByUserID *string                 `json:"createdByUserId"`
+	CreatedAt       string                  `json:"createdAt"`
+	UpdatedAt       string                  `json:"updatedAt"`
+}
+
+// CostReportAnomalyAlertInput is the PUT body for a report's own anomaly alert:
+// a whole replace, one alert per report. Destinations use the alert routing
+// vocabulary (AlertDestination).
+type CostReportAnomalyAlertInput struct {
+	Enabled       bool               `json:"enabled"`
+	Sigmas        float64            `json:"sigmas"`
+	MinDeltaCents int64              `json:"minDeltaCents"`
+	Destinations  []AlertDestination `json:"destinations"`
+}
+
+// CostReportAnomalyAlert is a report's stored anomaly alert. Recent findings
+// are decoded so the wire drift test sees them, but no attribute surfaces
+// them: they are observations, not configuration.
+type CostReportAnomalyAlert struct {
+	ID              string                     `json:"id"`
+	ReportID        string                     `json:"reportId"`
+	ReportName      string                     `json:"reportName"`
+	Enabled         bool                       `json:"enabled"`
+	Sigmas          float64                    `json:"sigmas"`
+	MinDeltaCents   int64                      `json:"minDeltaCents"`
+	Destinations    []AlertDestination         `json:"destinations"`
+	CreatedAt       string                     `json:"createdAt"`
+	UpdatedAt       string                     `json:"updatedAt"`
+	LastEvaluatedAt *string                    `json:"lastEvaluatedAt"`
+	LastError       *string                    `json:"lastError"`
+	Recent          []CostReportAnomalyFinding `json:"recent"`
+}
+
+// CostReportAnomalyFinding is one day a report's scope spiked.
+type CostReportAnomalyFinding struct {
+	ID         string  `json:"id"`
+	Day        string  `json:"day"`
+	Currency   string  `json:"currency"`
+	Actual     float64 `json:"actual"`
+	Baseline   float64 `json:"baseline"`
+	Threshold  float64 `json:"threshold"`
+	NotifiedAt *string `json:"notifiedAt"`
+	CreatedAt  string  `json:"createdAt"`
 }

@@ -1,8 +1,8 @@
 // Package provider implements the Infrawrench Terraform provider.
 //
-// It manages Infrawrench's *own* configuration — cost allocation and reporting,
+// It manages Infrawrench's *own* configuration: cost allocation and reporting,
 // monitoring, lifecycle governance, connected accounts and access control, and
-// alert delivery — by talking to the org-scoped REST routes directly. See the
+// alert delivery; by talking to the org-scoped REST routes directly. See the
 // README for why it does not wrap the existing config-as-code plan/apply
 // surface.
 package provider
@@ -156,7 +156,7 @@ func (p *infrawrenchProvider) Configure(ctx context.Context, req provider.Config
 
 // Resources is the registry, grouped the way the README's table is.
 //
-// Ordering here is cosmetic — Terraform indexes by type name — but keeping the
+// Ordering here is cosmetic (Terraform indexes by type name) but keeping the
 // groups together is what stops a new resource being added to the file and
 // forgotten in the documentation.
 func (p *infrawrenchProvider) Resources(_ context.Context) []func() resource.Resource {
@@ -164,44 +164,80 @@ func (p *infrawrenchProvider) Resources(_ context.Context) []func() resource.Res
 		// Cost allocation and reporting.
 		NewBudgetResource,
 		NewCostCentreResource,
+		NewCustomCostSourceResource,
 		NewAllocationRuleResource,
 		NewTagPolicyResource,
+		NewTagKeySettingsResource,
 		NewSavedFilterResource,
+		NewSavingsViewResource,
 		NewCostReportResource,
+		NewResourceReportResource,
 		NewCostReportFolderResource,
+		NewKubernetesEfficiencyReportResource,
 		NewCostReportNotificationResource,
+		NewCostForecastResource,
+		NewCostReportAnomalyAlertResource,
+		NewDashboardNotificationResource,
+		NewCostCanvasResource,
+		NewCostCanvasNotificationResource,
 		NewCostAlertResource,
 		NewCostAnnotationResource,
 		NewScenarioModelResource,
 		NewBillingRuleResource,
+		NewVirtualTagResource,
 		NewCostExportResource,
 		NewBusinessMetricResource,
+		NewBusinessMetricImporterResource,
 		NewManagedAccountResource,
+		NewBillingProfileResource,
 		NewCurrencySettingsResource,
 		NewExchangeRateResource,
 		NewAnomalySettingsResource,
+		NewAnomalySuppressionResource,
 		NewEfficiencyAlertSettingsResource,
+		NewAIRequestSourceResource,
+		NewAIAttributionDimensionResource,
+		NewRealizedSavingsSettingsResource,
+		NewSeatSettingsResource,
 
 		// Monitoring.
 		NewProbeResource,
+		NewSloResource,
 		NewStatusPageResource,
 		NewMetricAlertResource,
 		NewLogQueryResource,
 		NewCustomGraphResource,
 
+		// Service catalog.
+		NewServiceResource,
+		NewScorecardResource,
+
 		// Lifecycle governance.
+		NewOnCallScheduleResource,
+		NewJitAccessPolicyResource,
 		NewScheduleResource,
 		NewChangeFreezeResource,
 		NewDriftAlertSettingsResource,
+		NewDoraSettingsResource,
 		NewExpiryAlertSettingsResource,
+		NewExtendedSupportSettingsResource,
+		NewIdleFindingSettingsResource,
 		NewPostureAlertSettingsResource,
+		NewVulnerabilityAlertSettingsResource,
+		NewComplianceControlResource,
+		NewCompliancePackScheduleResource,
 		NewSessionRecordingSettingsResource,
 		NewNetworkFlowSettingsResource,
+		NewKubernetesNetworkSettingsResource,
+		NewNetworkFlowReportResource,
 
 		// Accounts and access.
 		NewAccountResource,
 		NewBastionResource,
 		NewRoleResource,
+		NewCostVisibilityScopeResource,
+		NewObjectSharingResource,
+		NewRoleDefaultDashboardResource,
 		NewAPIKeyResource,
 		NewSSHKeyResource,
 		NewSSHSnippetResource,
@@ -210,12 +246,17 @@ func (p *infrawrenchProvider) Resources(_ context.Context) []func() resource.Res
 
 		// Alert delivery.
 		NewAlertRoutingResource,
+		NewAlertEmailSettingsResource,
 		NewSlackChannelResource,
 		NewMSTeamsWebhookResource,
+		NewEventSubscriptionResource,
 		NewDigestSettingsResource,
 		NewDigestRecipientResource,
+		NewPagingProviderSettingsResource,
 		NewJiraIntegrationResource,
 		NewLinearIntegrationResource,
+		NewGithubIssueSettingsResource,
+		NewPrCheckRepositoryResource,
 	}
 }
 
@@ -227,6 +268,8 @@ func (p *infrawrenchProvider) DataSources(_ context.Context) []func() datasource
 		NewResourcesDataSource,
 		NewPermissionsDataSource,
 		NewSlackInstallationsDataSource,
+		NewMembersDataSource,
+		NewServiceDataSource,
 	}
 }
 

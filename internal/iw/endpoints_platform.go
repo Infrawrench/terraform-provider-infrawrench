@@ -3,6 +3,7 @@ package iw
 import (
 	"context"
 	"net/http"
+	"net/url"
 )
 
 // Typed endpoint wrappers for the monitoring, governance, access and delivery
@@ -23,7 +24,7 @@ func (c *Client) ListProbes(ctx context.Context) ([]SyntheticProbe, error) {
 	return envelope.Probes, nil
 }
 
-// GetProbe lists and filters — there is no single-GET route.
+// GetProbe lists and filters: there is no single-GET route.
 func (c *Client) GetProbe(ctx context.Context, id string) (*SyntheticProbe, error) {
 	all, err := c.ListProbes(ctx)
 	if err != nil {
@@ -57,13 +58,39 @@ func (c *Client) DeleteProbe(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/probes/"+seg(id))
 }
 
-/* ------------------------------ metric alerts ------------------------------ */
+/* ---------------------------------- SLOs ---------------------------------- */
 
-func (c *Client) ListMetricAlerts(ctx context.Context) ([]MetricAlertRule, error) {
-	var out []MetricAlertRule
-	err := c.Get(ctx, "/metric-alerts", &out)
-	return out, err
+// GetSlo reads the single-GET route and unwraps the SLO from its detail
+// envelope (which also carries hourly history the provider has no use for).
+func (c *Client) GetSlo(ctx context.Context, id string) (*Slo, error) {
+	var out SloDetail
+	if err := c.Get(ctx, "/slos/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out.Slo, nil
 }
+
+func (c *Client) CreateSlo(ctx context.Context, in SloInput) (*Slo, error) {
+	var out Slo
+	if err := c.Post(ctx, "/slos", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateSlo(ctx context.Context, id string, in SloInput) (*Slo, error) {
+	var out Slo
+	if err := c.Put(ctx, "/slos/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteSlo(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/slos/"+seg(id))
+}
+
+/* ------------------------------ metric alerts ------------------------------ */
 
 func (c *Client) GetMetricAlert(ctx context.Context, id string) (*MetricAlertRule, error) {
 	var out MetricAlertRule
@@ -106,7 +133,7 @@ func (c *Client) ListStatusPages(ctx context.Context) ([]StatusPage, error) {
 	return envelope.Pages, nil
 }
 
-// GetStatusPage lists and filters — there is no single-GET route on the
+// GetStatusPage lists and filters: there is no single-GET route on the
 // org-scoped tree. (`/api/status/{slug}` is the public render, not this shape.)
 func (c *Client) GetStatusPage(ctx context.Context, id string) (*StatusPage, error) {
 	all, err := c.ListStatusPages(ctx)
@@ -154,7 +181,7 @@ func (c *Client) ListSleepSchedules(ctx context.Context) ([]SleepSchedule, error
 	return envelope.Schedules, nil
 }
 
-// GetSleepSchedule lists and filters — there is no single-GET route.
+// GetSleepSchedule lists and filters: there is no single-GET route.
 func (c *Client) GetSleepSchedule(ctx context.Context, id string) (*SleepSchedule, error) {
 	all, err := c.ListSleepSchedules(ctx)
 	if err != nil {
@@ -196,7 +223,7 @@ func (c *Client) ListChangeFreezes(ctx context.Context) ([]ChangeFreeze, error) 
 	return out, err
 }
 
-// GetChangeFreeze lists and filters — there is no single-GET route.
+// GetChangeFreeze lists and filters: there is no single-GET route.
 func (c *Client) GetChangeFreeze(ctx context.Context, id string) (*ChangeFreeze, error) {
 	all, err := c.ListChangeFreezes(ctx)
 	if err != nil {
@@ -231,12 +258,6 @@ func (c *Client) DeleteChangeFreeze(ctx context.Context, id string) error {
 }
 
 /* ------------------------------ custom graphs ------------------------------ */
-
-func (c *Client) ListCustomGraphs(ctx context.Context) ([]CustomGraph, error) {
-	var out []CustomGraph
-	err := c.Get(ctx, "/custom-graphs", &out)
-	return out, err
-}
 
 func (c *Client) GetCustomGraph(ctx context.Context, id string) (*CustomGraph, error) {
 	var out CustomGraph
@@ -279,7 +300,7 @@ func (c *Client) ListLogQueries(ctx context.Context) ([]LogWorkspaceQuery, error
 	return envelope.Queries, nil
 }
 
-// GetLogQuery lists and filters — there is no single-GET route.
+// GetLogQuery lists and filters: there is no single-GET route.
 func (c *Client) GetLogQuery(ctx context.Context, id string) (*LogWorkspaceQuery, error) {
 	all, err := c.ListLogQueries(ctx)
 	if err != nil {
@@ -321,7 +342,7 @@ func (c *Client) ListRoles(ctx context.Context) ([]Role, error) {
 	return out, err
 }
 
-// GetRole lists and filters — there is no single-GET route.
+// GetRole lists and filters: there is no single-GET route.
 func (c *Client) GetRole(ctx context.Context, id string) (*Role, error) {
 	all, err := c.ListRoles(ctx)
 	if err != nil {
@@ -366,10 +387,45 @@ func (c *Client) ListPermissions(ctx context.Context) ([]string, error) {
 	return envelope.Permissions, nil
 }
 
-func (c *Client) ListMembers(ctx context.Context) ([]OrgMember, error) {
-	var out []OrgMember
-	err := c.Get(ctx, "/team/members", &out)
+/* ------------------------- role default dashboards ------------------------- */
+
+// ListRoleDefaultDashboards returns every role, system and custom, with its
+// default dashboard (null when it has none).
+func (c *Client) ListRoleDefaultDashboards(ctx context.Context) ([]RoleDefaultDashboard, error) {
+	var out []RoleDefaultDashboard
+	err := c.Get(ctx, "/dashboards/role-defaults", &out)
 	return out, err
+}
+
+// GetRoleDefaultDashboard lists and filters: there is no single-GET route. A
+// role that is gone, or one whose default was cleared outside Terraform, is a
+// synthesised 404 so the resource reads as "needs recreating".
+func (c *Client) GetRoleDefaultDashboard(ctx context.Context, roleID string) (*RoleDefaultDashboard, error) {
+	all, err := c.ListRoleDefaultDashboards(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].RoleID == roleID && all[i].DashboardID != nil {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/dashboards/role-defaults", roleID)
+}
+
+func (c *Client) SetRoleDefaultDashboard(ctx context.Context, roleID, dashboardID string) (*RoleDefaultDashboard, error) {
+	var out RoleDefaultDashboard
+	in := SetDefaultDashboardRequest{DashboardID: dashboardID}
+	if err := c.Put(ctx, "/dashboards/role-defaults/"+seg(roleID), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ClearRoleDefaultDashboard returns the role's members to the organization
+// default. The role itself is untouched.
+func (c *Client) ClearRoleDefaultDashboard(ctx context.Context, roleID string) error {
+	return c.Delete(ctx, "/dashboards/role-defaults/"+seg(roleID))
 }
 
 /* --------------------------------- ssh keys -------------------------------- */
@@ -380,7 +436,7 @@ func (c *Client) ListSSHKeys(ctx context.Context) ([]SSHKey, error) {
 	return out, err
 }
 
-// GetSSHKey lists and filters — there is no single-GET route.
+// GetSSHKey lists and filters: there is no single-GET route.
 func (c *Client) GetSSHKey(ctx context.Context, id string) (*SSHKey, error) {
 	all, err := c.ListSSHKeys(ctx)
 	if err != nil {
@@ -506,7 +562,7 @@ func (c *Client) ListSSHSnippets(ctx context.Context) ([]SSHSnippet, error) {
 	return out, err
 }
 
-// GetSSHSnippet lists and filters — there is no single-GET route.
+// GetSSHSnippet lists and filters: there is no single-GET route.
 func (c *Client) GetSSHSnippet(ctx context.Context, id string) (*SSHSnippet, error) {
 	all, err := c.ListSSHSnippets(ctx)
 	if err != nil {
@@ -542,7 +598,7 @@ func (c *Client) DeleteSSHSnippet(ctx context.Context, id string) error {
 
 /* --------------------------------- accounts -------------------------------- */
 
-// GetAccount lists and filters — the single-GET route is `/accounts/{id}/detail`,
+// GetAccount lists and filters: the single-GET route is `/accounts/{id}/detail`,
 // which joins in every synced resource and is far more than a read needs.
 func (c *Client) GetAccount(ctx context.Context, id string) (*Account, error) {
 	all, err := c.ListAccounts(ctx)
@@ -582,12 +638,6 @@ func (c *Client) DeleteAccount(ctx context.Context, id string) error {
 
 /* ----------------------------- managed accounts ---------------------------- */
 
-func (c *Client) ListManagedAccounts(ctx context.Context) ([]ManagedAccount, error) {
-	var out []ManagedAccount
-	err := c.Get(ctx, "/managed-accounts", &out)
-	return out, err
-}
-
 func (c *Client) GetManagedAccount(ctx context.Context, id string) (*ManagedAccount, error) {
 	var out ManagedAccount
 	if err := c.Get(ctx, "/managed-accounts/"+seg(id), &out); err != nil {
@@ -616,6 +666,38 @@ func (c *Client) DeleteManagedAccount(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/managed-accounts/"+seg(id))
 }
 
+/* ----------------------------- billing profiles ---------------------------- */
+
+func (c *Client) GetBillingProfile(ctx context.Context, id string) (*BillingProfile, error) {
+	var out BillingProfile
+	if err := c.Get(ctx, "/billing-profiles/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateBillingProfile(ctx context.Context, in BillingProfileInput) (*BillingProfile, error) {
+	var out BillingProfile
+	if err := c.Post(ctx, "/billing-profiles", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateBillingProfile(ctx context.Context, id string, in BillingProfileInput) (*BillingProfile, error) {
+	var out BillingProfile
+	if err := c.Put(ctx, "/billing-profiles/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteBillingProfile is refused with a 409 naming them while live customers
+// are assigned; Terraform destroys dependent managed accounts first.
+func (c *Client) DeleteBillingProfile(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/billing-profiles/"+seg(id))
+}
+
 /* ----------------------------- deploy triggers ----------------------------- */
 
 func (c *Client) ListDeployTriggers(ctx context.Context) ([]DeployTrigger, error) {
@@ -624,7 +706,7 @@ func (c *Client) ListDeployTriggers(ctx context.Context) ([]DeployTrigger, error
 	return out, err
 }
 
-// GetDeployTrigger lists and filters — there is no single-GET route.
+// GetDeployTrigger lists and filters: there is no single-GET route.
 func (c *Client) GetDeployTrigger(ctx context.Context, id string) (*DeployTrigger, error) {
 	all, err := c.ListDeployTriggers(ctx)
 	if err != nil {
@@ -664,7 +746,7 @@ func (c *Client) DeleteDeployTrigger(ctx context.Context, id string) error {
 /* ------------------------------ slack / teams ------------------------------ */
 
 // GetSlackStatus reads the whole Slack picture. There is no listing route for
-// channels or for installations — this one response is where both live, which
+// channels or for installations: this one response is where both live, which
 // is why the channel resource and the installations data source share it.
 func (c *Client) GetSlackStatus(ctx context.Context) (*SlackStatus, error) {
 	var out SlackStatus
@@ -841,6 +923,41 @@ func (c *Client) AdoptAlertRuleDefaults(ctx context.Context) error {
 	return c.Post(ctx, "/alert-rules/adopt-defaults", nil, nil)
 }
 
+/* ------------------------------- alert email ------------------------------- */
+
+// GetAlertEmailOptions reads the recipient picker: current members with their
+// login addresses, the external-address policy and whether this deployment can
+// send email at all. It needs only costs:read.
+func (c *Client) GetAlertEmailOptions(ctx context.Context) (*AlertEmailOptions, error) {
+	var out AlertEmailOptions
+	if err := c.Get(ctx, "/alert-email", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetAlertEmailSettings(ctx context.Context) (*AlertEmailSettingsView, error) {
+	var out AlertEmailSettingsView
+	if err := c.Get(ctx, "/alert-email/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PutAlertEmailSettings replaces the external-address policy as a whole. It
+// never edits a stored recipient list: an address the new policy refuses is
+// skipped at send time, and loosening the policy again brings it back.
+func (c *Client) PutAlertEmailSettings(ctx context.Context, in AlertEmailSettings) (*AlertEmailSettingsView, error) {
+	if in.AllowedDomains == nil {
+		in.AllowedDomains = []string{}
+	}
+	var out AlertEmailSettingsView
+	if err := c.Put(ctx, "/alert-email/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 /* ------------------------- resource alert settings ------------------------- */
 
 func (c *Client) GetDriftAlertSettings(ctx context.Context) (*DriftAlertSettings, error) {
@@ -854,6 +971,22 @@ func (c *Client) GetDriftAlertSettings(ctx context.Context) (*DriftAlertSettings
 func (c *Client) PutDriftAlertSettings(ctx context.Context, in DriftAlertSettingsUpdate) (*DriftAlertSettings, error) {
 	var out DriftAlertSettings
 	if err := c.Put(ctx, "/changes/alert-settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetDoraSettings(ctx context.Context) (*DoraSettings, error) {
+	var out DoraSettings
+	if err := c.Get(ctx, "/dora/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutDoraSettings(ctx context.Context, in DoraSettingsUpdate) (*DoraSettings, error) {
+	var out DoraSettings
+	if err := c.Put(ctx, "/dora/settings", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -875,6 +1008,38 @@ func (c *Client) PutExpiryAlertSettings(ctx context.Context, in ExpiryAlertSetti
 	return &out, nil
 }
 
+func (c *Client) GetExtendedSupportSettings(ctx context.Context) (*ExtendedSupportSettings, error) {
+	var out ExtendedSupportSettings
+	if err := c.Get(ctx, "/extended-support/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutExtendedSupportSettings(ctx context.Context, in ExtendedSupportSettingsUpdate) (*ExtendedSupportSettings, error) {
+	var out ExtendedSupportSettings
+	if err := c.Put(ctx, "/extended-support/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetIdleFindingSettings(ctx context.Context) (*IdleFindingSettings, error) {
+	var out IdleFindingSettings
+	if err := c.Get(ctx, "/idle-findings/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutIdleFindingSettings(ctx context.Context, in IdleFindingSettingsUpdate) (*IdleFindingSettings, error) {
+	var out IdleFindingSettings
+	if err := c.Put(ctx, "/idle-findings/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) GetPostureAlertSettings(ctx context.Context) (*PostureAlertSettings, error) {
 	var out PostureAlertSettings
 	if err := c.Get(ctx, "/posture/settings", &out); err != nil {
@@ -886,6 +1051,24 @@ func (c *Client) GetPostureAlertSettings(ctx context.Context) (*PostureAlertSett
 func (c *Client) PutPostureAlertSettings(ctx context.Context, in PostureAlertSettingsUpdate) (*PostureAlertSettings, error) {
 	var out PostureAlertSettings
 	if err := c.Put(ctx, "/posture/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetVulnerabilityAlertSettings reads the org's vulnerability alert settings.
+func (c *Client) GetVulnerabilityAlertSettings(ctx context.Context) (*VulnerabilityAlertSettings, error) {
+	var out VulnerabilityAlertSettings
+	if err := c.Get(ctx, "/vulnerabilities/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PutVulnerabilityAlertSettings writes the org's vulnerability alert settings.
+func (c *Client) PutVulnerabilityAlertSettings(ctx context.Context, in VulnerabilityAlertSettingsUpdate) (*VulnerabilityAlertSettings, error) {
+	var out VulnerabilityAlertSettings
+	if err := c.Put(ctx, "/vulnerabilities/settings", in, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -925,11 +1108,30 @@ func (c *Client) PutNetworkFlowSettings(ctx context.Context, in NetworkFlowSetti
 	return &out, nil
 }
 
+// GetKubernetesNetworkSettings reads one cluster's settings. The route 404s
+// for an account that does not exist or does not report pod traffic, which is
+// exactly "needs recreating" for Terraform.
+func (c *Client) GetKubernetesNetworkSettings(ctx context.Context, accountID string) (*KubernetesNetworkSettings, error) {
+	var out KubernetesNetworkSettings
+	if err := c.Get(ctx, "/network-flows/kubernetes/"+url.PathEscape(accountID)+"/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutKubernetesNetworkSettings(ctx context.Context, accountID string, in KubernetesNetworkSettingsInput) (*KubernetesNetworkSettings, error) {
+	var out KubernetesNetworkSettings
+	if err := c.Put(ctx, "/network-flows/kubernetes/"+url.PathEscape(accountID)+"/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 /* ----------------------------- issue trackers ------------------------------ */
 
 // GetJiraIntegration unwraps the {"integration": …} envelope. A disconnected
 // org returns a null integration, which is a 404 as far as Terraform is
-// concerned — there is nothing to refresh.
+// concerned: there is nothing to refresh.
 func (c *Client) GetJiraIntegration(ctx context.Context) (*JiraIntegration, error) {
 	var envelope struct {
 		Integration *JiraIntegration `json:"integration"`
@@ -980,6 +1182,29 @@ func (c *Client) DeleteLinearIntegration(ctx context.Context) error {
 	return c.Delete(ctx, "/linear")
 }
 
+/* ------------------------------ GitHub issues ------------------------------ */
+
+// GetGithubIssueSettings unwraps `.settings` from the status envelope. An
+// organization that never saved any reads back the shipped defaults, so there
+// is no 404 to synthesise.
+func (c *Client) GetGithubIssueSettings(ctx context.Context) (*GithubIssueSettings, error) {
+	var envelope GithubIssuesStatus
+	if err := c.Get(ctx, "/github-issues", &envelope); err != nil {
+		return nil, err
+	}
+	return &envelope.Settings, nil
+}
+
+// PutGithubIssueSettings replaces the whole document. There is no DELETE;
+// resetting is a PUT of DefaultGithubIssueSettings.
+func (c *Client) PutGithubIssueSettings(ctx context.Context, in GithubIssueSettingsInput) (*GithubIssueSettings, error) {
+	var out GithubIssueSettings
+	if err := c.Put(ctx, "/github-issues/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 /* ---------------------------- workflow schedules --------------------------- */
 
 // GetWorkflowSchedule unwraps the {"schedule": …} envelope. A null schedule
@@ -1014,6 +1239,55 @@ func (c *Client) DeleteWorkflowSchedule(ctx context.Context, workflowID string) 
 	return c.Delete(ctx, "/workflows/"+seg(workflowID)+"/schedule")
 }
 
+/* ---------------------------- on-call rotations ---------------------------- */
+
+// ListOnCallSchedules unwraps the {"schedules": […]} envelope.
+func (c *Client) ListOnCallSchedules(ctx context.Context) ([]OnCallSchedule, error) {
+	var envelope struct {
+		Schedules []OnCallSchedule `json:"schedules"`
+	}
+	if err := c.Get(ctx, "/on-call/schedules", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Schedules, nil
+}
+
+// GetOnCallSchedule lists and filters: there is no single-GET route. The 404 is
+// synthesised here so a rotation deleted in the app reads back as gone rather
+// than as an empty list Terraform would treat as success.
+func (c *Client) GetOnCallSchedule(ctx context.Context, id string) (*OnCallSchedule, error) {
+	all, err := c.ListOnCallSchedules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/on-call/schedules", id)
+}
+
+func (c *Client) CreateOnCallSchedule(ctx context.Context, in OnCallScheduleCreate) (*OnCallSchedule, error) {
+	var out OnCallSchedule
+	if err := c.Post(ctx, "/on-call/schedules", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateOnCallSchedule(ctx context.Context, id string, in OnCallScheduleUpdate) (*OnCallSchedule, error) {
+	var out OnCallSchedule
+	if err := c.Patch(ctx, "/on-call/schedules/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteOnCallSchedule(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/on-call/schedules/"+seg(id))
+}
+
 /* --------------------------- read-only reference --------------------------- */
 
 // ListAccountResources lists the synced resources of one account.
@@ -1021,4 +1295,476 @@ func (c *Client) ListAccountResources(ctx context.Context, accountID string) ([]
 	var out []Resource
 	err := c.Get(ctx, "/accounts/"+seg(accountID)+"/resources", &out)
 	return out, err
+}
+
+/* ---------------------------- cost visibility ----------------------------- */
+
+// ListCostVisibilityScopes unwraps the {"scopes": […]} envelope.
+func (c *Client) ListCostVisibilityScopes(ctx context.Context) ([]CostVisibilityScope, error) {
+	var envelope struct {
+		Scopes []CostVisibilityScope `json:"scopes"`
+	}
+	if err := c.Get(ctx, "/cost-visibility", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Scopes, nil
+}
+
+// GetCostVisibilityScope lists and filters by principal: scopes are keyed by
+// (kind, principal) and there is no single-GET route.
+func (c *Client) GetCostVisibilityScope(ctx context.Context, kind, principalID string) (*CostVisibilityScope, error) {
+	all, err := c.ListCostVisibilityScopes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].PrincipalKind == kind && all[i].PrincipalID == principalID {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/cost-visibility", kind+"/"+principalID)
+}
+
+// PutCostVisibilityScope creates or replaces the scope of one principal.
+func (c *Client) PutCostVisibilityScope(ctx context.Context, in CostVisibilityScopeInput) (*CostVisibilityScope, error) {
+	var out CostVisibilityScope
+	if err := c.Put(ctx, "/cost-visibility", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteCostVisibilityScope(ctx context.Context, kind, principalID string) error {
+	return c.Delete(ctx, "/cost-visibility/"+seg(kind)+"/"+seg(principalID))
+}
+
+/* ------------------------------ object sharing ----------------------------- */
+
+func (c *Client) GetObjectSharing(ctx context.Context, objectType, objectID string) (*ObjectSharing, error) {
+	var out ObjectSharing
+	if err := c.Get(ctx, "/sharing/"+seg(objectType)+"/"+seg(objectID), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutObjectSharing(ctx context.Context, objectType, objectID string, in ObjectSharingInput) (*ObjectSharing, error) {
+	var out ObjectSharing
+	if err := c.Put(ctx, "/sharing/"+seg(objectType)+"/"+seg(objectID), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ResetObjectSharing returns the object to the default: everyone in the org
+// can edit, no explicit grants.
+func (c *Client) ResetObjectSharing(ctx context.Context, objectType, objectID string) error {
+	return c.Delete(ctx, "/sharing/"+seg(objectType)+"/"+seg(objectID))
+}
+
+/* -------------------------- AI request attribution ------------------------- */
+
+// ListAIRequestSources unwraps the {"sources": […]} envelope.
+func (c *Client) ListAIRequestSources(ctx context.Context) ([]AIRequestSource, error) {
+	var envelope struct {
+		Sources []AIRequestSource `json:"sources"`
+	}
+	if err := c.Get(ctx, "/ai-attribution/sources", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Sources, nil
+}
+
+func (c *Client) GetAIRequestSource(ctx context.Context, id string) (*AIRequestSource, error) {
+	var out AIRequestSource
+	if err := c.Get(ctx, "/ai-attribution/sources/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateAIRequestSource(ctx context.Context, in AIRequestSourceInput) (*AIRequestSource, error) {
+	var out AIRequestSource
+	if err := c.Post(ctx, "/ai-attribution/sources", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateAIRequestSource(ctx context.Context, id string, in AIRequestSourceInput) (*AIRequestSource, error) {
+	var out AIRequestSource
+	if err := c.Put(ctx, "/ai-attribution/sources/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteAIRequestSource(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/ai-attribution/sources/"+seg(id))
+}
+
+// ListAIRequestSourceKinds unwraps the {"sourceKinds": […]} envelope.
+func (c *Client) ListAIRequestSourceKinds(ctx context.Context) ([]AIRequestSourceKindOption, error) {
+	var envelope struct {
+		SourceKinds []AIRequestSourceKindOption `json:"sourceKinds"`
+	}
+	if err := c.Get(ctx, "/ai-attribution/source-kinds", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.SourceKinds, nil
+}
+
+// ListAIAttributionDimensions unwraps the {"dimensions": […]} envelope.
+func (c *Client) ListAIAttributionDimensions(ctx context.Context) ([]AIAttributionDimension, error) {
+	var envelope struct {
+		Dimensions []AIAttributionDimension `json:"dimensions"`
+	}
+	if err := c.Get(ctx, "/ai-attribution/dimensions", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Dimensions, nil
+}
+
+// GetAIAttributionDimension lists and filters: there is no single-GET route.
+func (c *Client) GetAIAttributionDimension(ctx context.Context, id string) (*AIAttributionDimension, error) {
+	all, err := c.ListAIAttributionDimensions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/ai-attribution/dimensions", id)
+}
+
+func (c *Client) CreateAIAttributionDimension(ctx context.Context, in AIAttributionDimensionInput) (*AIAttributionDimension, error) {
+	var out AIAttributionDimension
+	if err := c.Post(ctx, "/ai-attribution/dimensions", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateAIAttributionDimension(ctx context.Context, id string, in AIAttributionDimensionInput) (*AIAttributionDimension, error) {
+	var out AIAttributionDimension
+	if err := c.Put(ctx, "/ai-attribution/dimensions/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteAIAttributionDimension(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/ai-attribution/dimensions/"+seg(id))
+}
+
+/* ---------------------------- realized savings ----------------------------- */
+
+func (c *Client) GetRealizedSavingsSettings(ctx context.Context) (*RealizedSavingsSettings, error) {
+	var out RealizedSavingsSettings
+	if err := c.Get(ctx, "/savings/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutRealizedSavingsSettings(ctx context.Context, in RealizedSavingsSettings) (*RealizedSavingsSettings, error) {
+	var out RealizedSavingsSettings
+	if err := c.Put(ctx, "/savings/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+/* --------------------------------- seats ---------------------------------- */
+
+func (c *Client) GetSeatSettings(ctx context.Context) (*SeatSettings, error) {
+	var out SeatSettings
+	if err := c.Get(ctx, "/seats/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutSeatSettings(ctx context.Context, in SeatSettings) (*SeatSettings, error) {
+	var out SeatSettings
+	if err := c.Put(ctx, "/seats/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+/* ---------------------------- paging providers ---------------------------- */
+
+// ListPagingProviders unwraps the {"accounts": […]} envelope.
+func (c *Client) ListPagingProviders(ctx context.Context) ([]PagingProviderAccount, error) {
+	var envelope struct {
+		Accounts []PagingProviderAccount `json:"accounts"`
+	}
+	if err := c.Get(ctx, "/paging-providers", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Accounts, nil
+}
+
+// GetPagingProvider reads one account by listing: there is no single-object
+// route. An account that is gone (or whose plugin cannot page) is a 404.
+func (c *Client) GetPagingProvider(ctx context.Context, accountID string) (*PagingProviderAccount, error) {
+	all, err := c.ListPagingProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].AccountID == accountID {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/paging-providers", accountID)
+}
+
+// PutPagingProviderSettings unwraps {"account": …, "warning": …}.
+func (c *Client) PutPagingProviderSettings(ctx context.Context, accountID string, in PagingProviderSettingsInput) (*PagingProviderAccount, *string, error) {
+	var out struct {
+		Account PagingProviderAccount `json:"account"`
+		Warning *string               `json:"warning"`
+	}
+	if err := c.Put(ctx, "/paging-providers/"+seg(accountID)+"/settings", in, &out); err != nil {
+		return nil, nil, err
+	}
+	return &out.Account, out.Warning, nil
+}
+
+/* ------------------------- just-in-time access ---------------------------- */
+
+// GetJitPolicy reads one policy; this route has a single-object GET.
+func (c *Client) GetJitPolicy(ctx context.Context, id string) (*JitPolicy, error) {
+	var out JitPolicy
+	if err := c.Get(ctx, "/jit-access/policies/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateJitPolicy(ctx context.Context, in JitPolicyInput) (*JitPolicy, error) {
+	var out JitPolicy
+	if err := c.Post(ctx, "/jit-access/policies", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateJitPolicy replaces the policy (PUT).
+func (c *Client) UpdateJitPolicy(ctx context.Context, id string, in JitPolicyInput) (*JitPolicy, error) {
+	var out JitPolicy
+	if err := c.Put(ctx, "/jit-access/policies/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteJitPolicy deletes the policy. Grants it already made still end on
+// time; its pending requests lose their approvers and time out.
+func (c *Client) DeleteJitPolicy(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/jit-access/policies/"+seg(id))
+}
+
+/* --------------------------- pull request checks --------------------------- */
+
+func (c *Client) GetPrCheckRepository(ctx context.Context, id string) (*PrCheckRepository, error) {
+	var out PrCheckRepository
+	if err := c.Get(ctx, "/pr-checks/repositories/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreatePrCheckRepository(ctx context.Context, in PrCheckRepositoryInput) (*PrCheckRepository, error) {
+	var out PrCheckRepository
+	if err := c.Post(ctx, "/pr-checks/repositories", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdatePrCheckRepository(ctx context.Context, id string, in PrCheckRepositoryInput) (*PrCheckRepository, error) {
+	var out PrCheckRepository
+	if err := c.Put(ctx, "/pr-checks/repositories/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeletePrCheckRepository(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/pr-checks/repositories/"+seg(id))
+}
+
+/* -------------------------------- services -------------------------------- */
+
+// GetService reads one service. The route accepts the id or the slug, which
+// is what lets `terraform import` and the data source take either.
+func (c *Client) GetService(ctx context.Context, idOrSlug string) (*Service, error) {
+	var out ServiceDetail
+	if err := c.Get(ctx, "/services/"+seg(idOrSlug), &out); err != nil {
+		return nil, err
+	}
+	return &out.Service, nil
+}
+
+func (c *Client) CreateService(ctx context.Context, in ServiceInput) (*Service, error) {
+	var out Service
+	if err := c.Post(ctx, "/services", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateService is a PATCH: lists that are present replace the stored ones.
+// Explicit members are not part of the body, so they survive any update.
+func (c *Client) UpdateService(ctx context.Context, id string, in ServiceInput) (*Service, error) {
+	var out Service
+	if err := c.Patch(ctx, "/services/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteService deletes the service. Its member resources are untouched.
+func (c *Client) DeleteService(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/services/"+seg(id))
+}
+
+/* ------------------------------- scorecards ------------------------------- */
+
+func (c *Client) GetScorecard(ctx context.Context, id string) (*Scorecard, error) {
+	var out Scorecard
+	if err := c.Get(ctx, "/scorecards/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateScorecard(ctx context.Context, in ScorecardInput) (*Scorecard, error) {
+	var out Scorecard
+	if err := c.Post(ctx, "/scorecards", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateScorecard is a PATCH carrying every key, so it replaces the whole
+// scorecard.
+func (c *Client) UpdateScorecard(ctx context.Context, id string, in ScorecardInput) (*Scorecard, error) {
+	var out Scorecard
+	if err := c.Patch(ctx, "/scorecards/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteScorecard deletes the scorecard. Services are untouched.
+func (c *Client) DeleteScorecard(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/scorecards/"+seg(id))
+}
+
+/* --------------------------- event subscriptions --------------------------- */
+
+func (c *Client) GetEventSubscription(ctx context.Context, id string) (*EventSubscription, error) {
+	var out EventSubscription
+	if err := c.Get(ctx, "/event-subscriptions/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateEventSubscription(ctx context.Context, in EventSubscriptionInput) (*EventSubscriptionWithSecret, error) {
+	var out EventSubscriptionWithSecret
+	if err := c.Post(ctx, "/event-subscriptions", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateEventSubscription(ctx context.Context, id string, in EventSubscriptionInput) (*EventSubscription, error) {
+	var out EventSubscription
+	if err := c.Put(ctx, "/event-subscriptions/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RerollEventSubscriptionSecret mints a new signing secret; the old one keeps
+// signing for 24 hours.
+func (c *Client) RerollEventSubscriptionSecret(ctx context.Context, id string) (*EventSubscriptionWithSecret, error) {
+	var out EventSubscriptionWithSecret
+	if err := c.Post(ctx, "/event-subscriptions/"+seg(id)+"/reroll-secret", struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteEventSubscription(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/event-subscriptions/"+seg(id))
+}
+
+/* -------------------------------- compliance ------------------------------- */
+
+// complianceControlPath builds the per-control route. Control ids carry dots
+// ("CC6.1", "8.8"), and escaping them keeps any future id with a slash or a
+// space addressable too.
+func complianceControlPath(frameworkID, controlID string) string {
+	return "/compliance/controls/" + seg(frameworkID) + "/" + seg(controlID)
+}
+
+// GetComplianceControlSetting reads the stored decision about one control. A
+// control nobody decided about 404s, as does an unknown framework or control.
+func (c *Client) GetComplianceControlSetting(ctx context.Context, frameworkID, controlID string) (*ComplianceControlSetting, error) {
+	var out ComplianceControlSetting
+	if err := c.Get(ctx, complianceControlPath(frameworkID, controlID), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PutComplianceControlSetting upserts the decision: a full replace.
+func (c *Client) PutComplianceControlSetting(ctx context.Context, frameworkID, controlID string, in ComplianceControlSettingInput) (*ComplianceControlSetting, error) {
+	var out ComplianceControlSetting
+	if err := c.Put(ctx, complianceControlPath(frameworkID, controlID), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteComplianceControlSetting resets the control to the default
+// (applicable, unowned). 404 when nothing was stored.
+func (c *Client) DeleteComplianceControlSetting(ctx context.Context, frameworkID, controlID string) error {
+	return c.Delete(ctx, complianceControlPath(frameworkID, controlID))
+}
+
+func (c *Client) GetCompliancePackSchedule(ctx context.Context, id string) (*CompliancePackSchedule, error) {
+	var out CompliancePackSchedule
+	if err := c.Get(ctx, "/compliance/schedules/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateCompliancePackSchedule(ctx context.Context, in CompliancePackScheduleInput) (*CompliancePackSchedule, error) {
+	var out CompliancePackSchedule
+	if err := c.Post(ctx, "/compliance/schedules", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateCompliancePackSchedule(ctx context.Context, id string, in CompliancePackScheduleInput) (*CompliancePackSchedule, error) {
+	var out CompliancePackSchedule
+	if err := c.Put(ctx, "/compliance/schedules/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteCompliancePackSchedule(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/compliance/schedules/"+seg(id))
 }

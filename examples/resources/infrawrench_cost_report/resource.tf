@@ -25,3 +25,40 @@ resource "infrawrench_cost_report" "by_service" {
     }
   }
 }
+
+# How many services were billed each quarter, drawn as a table.
+resource "infrawrench_cost_report" "services_billed" {
+  name = "Services billed per quarter"
+
+  config {
+    chart_type = "table"
+    binning    = "quarterly"
+    group_by   = "service"
+    measure    = "count"
+
+    date_range {
+      kind   = "relative"
+      preset = "12m"
+    }
+  }
+}
+
+# One bar per service, split by region, with last period paired beside each bar.
+resource "infrawrench_cost_report" "services_vs_last_month" {
+  name = "Services this month vs last"
+
+  config {
+    chart_type              = "stacked_bar"
+    binning                 = "monthly"
+    x_axis                  = "service"
+    group_by                = "region"
+    top_n                   = 8
+    compare_previous_period = true
+    comparison_style        = "bars"
+
+    date_range {
+      kind   = "relative"
+      preset = "mtd"
+    }
+  }
+}

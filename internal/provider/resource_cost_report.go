@@ -34,9 +34,19 @@ type costReportResource struct{ client *iw.Client }
 
 // costReportChartTypes and costReportBinnings are the closed enums the graph
 // config accepts.
+//
+// `hourly` is in the server's enum but deliberately not here: the server
+// refuses to run an hourly report while no connected account stores hourly
+// cost rows, and every provider's rows are daily today. Accepting it would let
+// a plan succeed for a report that can only ever render an error.
 var (
-	costReportChartTypes = []string{"stacked_bar", "multi_bar", "line", "area", "pie"}
-	costReportBinnings   = []string{"daily", "weekly", "monthly", "cumulative"}
+	costReportChartTypes = []string{"stacked_bar", "multi_bar", "line", "area", "pie", "donut", "table"}
+	costReportBinnings   = []string{"daily", "weekly", "monthly", "quarterly", "cumulative"}
+	costReportMeasures   = []string{"cost", "usage", "count"}
+	// costReportXAxes is `date` (the bins, which the wire spells by omitting
+	// the field) plus every dimension a report can group by.
+	costReportXAxes            = append([]string{"date"}, costDimensions...)
+	costReportComparisonStyles = []string{"line", "bars"}
 
 	// costReportGroupBy is the filter dimensions plus the explicit "no grouping"
 	// option, which the server spells `none` rather than omitting the key.
@@ -64,7 +74,18 @@ type costReportConfigModel struct {
 	CostBasis             types.String `tfsdk:"cost_basis"`
 	UnitCostMetricID      types.String `tfsdk:"unit_cost_metric_id"`
 	UnitCostMode          types.String `tfsdk:"unit_cost_mode"`
+	UnitCostScale         types.Int64  `tfsdk:"unit_cost_scale"`
+	UnitCostUsageUnit     types.String `tfsdk:"unit_cost_usage_unit"`
+	UnitCostGroupByLabel  types.String `tfsdk:"unit_cost_group_by_label"`
+	UnitCostLabelFilter   types.List   `tfsdk:"unit_cost_label_filter"`
 	Adjusted              types.Bool   `tfsdk:"adjusted"`
+	Measure               types.String `tfsdk:"measure"`
+	UsageUnit             types.String `tfsdk:"usage_unit"`
+	Cumulative            types.Bool   `tfsdk:"cumulative"`
+	XAxis                 types.String `tfsdk:"x_axis"`
+	XAxisTagKey           types.String `tfsdk:"x_axis_tag_key"`
+	SegmentByDate         types.Bool   `tfsdk:"segment_by_date"`
+	ComparisonStyle       types.String `tfsdk:"comparison_style"`
 	DateRange             types.Object `tfsdk:"date_range"`
 	Filter                types.List   `tfsdk:"filter"`
 }
@@ -90,21 +111,32 @@ var costReportDateRangeAttrTypes = map[string]attr.Type{
 var costReportDateRangeObjectType = types.ObjectType{AttrTypes: costReportDateRangeAttrTypes}
 
 var costReportConfigAttrTypes = map[string]attr.Type{
-	"chart_type":              types.StringType,
-	"binning":                 types.StringType,
-	"group_by":                types.StringType,
-	"group_by_tag_key":        types.StringType,
-	"saved_filter_id":         types.StringType,
-	"top_n":                   types.Int64Type,
-	"compare_previous_period": types.BoolType,
-	"show_forecast":           types.BoolType,
-	"scenario_model_id":       types.StringType,
-	"cost_basis":              types.StringType,
-	"unit_cost_metric_id":     types.StringType,
-	"unit_cost_mode":          types.StringType,
-	"adjusted":                types.BoolType,
-	"date_range":              costReportDateRangeObjectType,
-	"filter":                  types.ListType{ElemType: costFilterObjectType},
+	"chart_type":               types.StringType,
+	"binning":                  types.StringType,
+	"group_by":                 types.StringType,
+	"group_by_tag_key":         types.StringType,
+	"saved_filter_id":          types.StringType,
+	"top_n":                    types.Int64Type,
+	"compare_previous_period":  types.BoolType,
+	"show_forecast":            types.BoolType,
+	"scenario_model_id":        types.StringType,
+	"cost_basis":               types.StringType,
+	"unit_cost_metric_id":      types.StringType,
+	"unit_cost_mode":           types.StringType,
+	"unit_cost_scale":          types.Int64Type,
+	"unit_cost_usage_unit":     types.StringType,
+	"unit_cost_group_by_label": types.StringType,
+	"unit_cost_label_filter":   types.ListType{ElemType: unitCostLabelFilterObjectType},
+	"adjusted":                 types.BoolType,
+	"measure":                  types.StringType,
+	"usage_unit":               types.StringType,
+	"cumulative":               types.BoolType,
+	"x_axis":                   types.StringType,
+	"x_axis_tag_key":           types.StringType,
+	"segment_by_date":          types.BoolType,
+	"comparison_style":         types.StringType,
+	"date_range":               costReportDateRangeObjectType,
+	"filter":                   types.ListType{ElemType: costFilterObjectType},
 }
 
 // costReportObjectAsOptions is how every nested object in this resource is
@@ -164,8 +196,11 @@ func (r *costReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					"binning": schema.StringAttribute{
 						Required: true,
 						MarkdownDescription: "Time bucketing of the x axis. One of `" +
-							joinBackticked(costReportBinnings) + "`. `cumulative` accumulates spend from the " +
-							"start of the range rather than bucketing it.",
+							joinBackticked(costReportBinnings) + "`. Weeks start on Monday and quarters on " +
+							"the first of January, April, July and October (UTC). `cumulative` is the older " +
+							"spelling of `daily` with `cumulative = true`. Hourly bins are not accepted: " +
+							"every provider's cost rows are stored per day, and the server refuses to run " +
+							"an hourly report.",
 						Validators: []validator.String{oneOfValidator(costReportBinnings...)},
 					},
 					"group_by": schema.StringAttribute{
@@ -176,8 +211,9 @@ func (r *costReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					},
 					"group_by_tag_key": schema.StringAttribute{
 						Optional: true,
-						MarkdownDescription: "Which tag to group by. Required when `group_by` is `tag`, " +
-							"and rejected otherwise.",
+						MarkdownDescription: "Which tag to group by: a provider tag key when `group_by` is `tag`, " +
+							"or a virtual tag key when it is `virtual_tag`. Required for those two and " +
+							"rejected otherwise.",
 					},
 					"saved_filter_id": schema.StringAttribute{
 						Optional: true,
@@ -213,8 +249,8 @@ func (r *costReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					"cost_basis": schema.StringAttribute{
 						Optional: true,
 						MarkdownDescription: "`cash` to chart invoiced spend, `amortized` to spread " +
-							"commitment fees across the term they cover.",
-						Validators: []validator.String{oneOfValidator("cash", "amortized")},
+							"commitment fees across the term they cover, " + blendedBasisDescription,
+						Validators: []validator.String{oneOfValidator("cash", "amortized", "blended")},
 					},
 					"unit_cost_metric_id": schema.StringAttribute{
 						Optional: true,
@@ -223,13 +259,85 @@ func (r *costReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					},
 					"unit_cost_mode": schema.StringAttribute{
 						Optional: true,
-						MarkdownDescription: "How the unit cost is presented when `unit_cost_metric_id` " +
-							"is set.",
+						MarkdownDescription: "The calculation: `unit_cost` (spend ÷ metric, the default when " +
+							"`unit_cost_metric_id` is set), `margin` (revenue metrics only), `raw_metric` (the " +
+							"metric beside spend), or `usage_unit_cost` (spend ÷ provider usage in " +
+							"`unit_cost_usage_unit`, no metric needed).",
+						Validators: []validator.String{
+							oneOfValidator("unit_cost", "margin", "usage_unit_cost", "raw_metric"),
+						},
+					},
+					"unit_cost_scale": schema.Int64Attribute{
+						Optional: true,
+						MarkdownDescription: "\"Per N units\" for a ratio, or the unit a raw metric is shown " +
+							"in: `1`, `100`, `1000`, `1000000` or `1000000000`.",
+						Validators: []validator.Int64{int64validator.OneOf(1, 100, 1000, 1000000, 1000000000)},
+					},
+					"unit_cost_usage_unit": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "With `unit_cost_mode = \"usage_unit_cost\"`: the provider usage " +
+							"unit to divide by, as the cost data spells it (`GB-Mo`, `Hrs`).",
+					},
+					"unit_cost_group_by_label": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "One line per value of this business-metric label. In a ratio " +
+							"mode the label must be mapped on the metric (`label_mapping`).",
 					},
 					"adjusted": schema.BoolAttribute{
 						Optional: true,
 						MarkdownDescription: "Apply billing rules to the figures, charting spend as " +
 							"restated by your `infrawrench_billing_rule`s rather than as invoiced.",
+					},
+					"measure": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "What the Y axis sums. One of `" + joinBackticked(costReportMeasures) +
+							"`; omitted is `cost`. `usage` sums the usage quantity providers report and " +
+							"requires `usage_unit`. `count` is how many distinct values of `group_by` had " +
+							"nonzero cost in each bin and requires a `group_by` other than `none`. Neither " +
+							"`usage` nor `count` can be combined with `show_forecast`, `scenario_model_id`, " +
+							"`adjusted` or `unit_cost_metric_id`, and `count` cannot be `cumulative`; the " +
+							"server rejects those combinations.",
+						Validators: []validator.String{oneOfValidator(costReportMeasures...)},
+					},
+					"usage_unit": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "The usage unit a `usage` measure sums, exactly as the " +
+							"provider spells it (for example `Hrs` or `GB-Mo`), 1–64 characters. Required " +
+							"when `measure` is `usage` and rejected otherwise.",
+						Validators: []validator.String{stringvalidator.LengthBetween(1, 64)},
+					},
+					"cumulative": schema.BoolAttribute{
+						Optional: true,
+						MarkdownDescription: "Draw running totals from the start of the range instead of " +
+							"per-bin values, at any bin size. Omitted is off.",
+					},
+					"x_axis": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "What goes on the X axis. One of `" + joinBackticked(costReportXAxes) +
+							"`; omitted (or `date`) is the date bins. A dimension draws one bar per value, " +
+							"ranked by spend over the range with values past `top_n` folded into Other, and " +
+							"`group_by` then segments each bar. A dimension axis cannot be combined with " +
+							"`show_forecast`, `cumulative`, a `count` measure or `unit_cost_metric_id`, nor " +
+							"with a `pie` or `donut` `chart_type`; the server rejects those combinations.",
+						Validators: []validator.String{oneOfValidator(costReportXAxes...)},
+					},
+					"x_axis_tag_key": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "With `x_axis` set to `tag` or `virtual_tag`: which key's values " +
+							"go on the axis, 1–256 characters.",
+						Validators: []validator.String{stringvalidator.LengthBetween(1, 256)},
+					},
+					"segment_by_date": schema.BoolAttribute{
+						Optional: true,
+						MarkdownDescription: "With a dimension `x_axis` and `group_by = \"none\"`: split each " +
+							"bar by date bin instead of by a second dimension. Omitted is off.",
+					},
+					"comparison_style": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "How `compare_previous_period` is drawn: `line` (omitted) is the " +
+							"dashed totals line, `bars` a previous-period bar paired beside each bar (bar " +
+							"chart types only). Table views always list previous, change and change % columns.",
+						Validators: []validator.String{oneOfValidator(costReportComparisonStyles...)},
 					},
 				},
 				Blocks: map[string]schema.Block{
@@ -263,6 +371,29 @@ func (r *costReportResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						},
 					},
 					"filter": costFilterBlockSchema("Restricts the report to matching spend. Clauses are ANDed."),
+					"unit_cost_label_filter": schema.ListNestedBlock{
+						MarkdownDescription: "Keep only business-metric values carrying these labels, for a " +
+							"unit-cost report. At most 10. In a ratio mode each label must be mapped on the metric.",
+						Validators: []validator.List{sizeAtMost(10)},
+						NestedObject: schema.NestedBlockObject{
+							Attributes: map[string]schema.Attribute{
+								"key": schema.StringAttribute{
+									Required:            true,
+									MarkdownDescription: "The label key, e.g. `customer`.",
+								},
+								"op": schema.StringAttribute{
+									Required:            true,
+									MarkdownDescription: "`in` keeps the listed values, `not_in` drops them.",
+									Validators:          []validator.String{oneOfValidator("in", "not_in")},
+								},
+								"values": schema.ListAttribute{
+									Required:            true,
+									ElementType:         types.StringType,
+									MarkdownDescription: "Label values to match. Must not be empty.",
+								},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -430,6 +561,11 @@ func costReportInputFrom(ctx context.Context, model costReportResourceModel) (iw
 	if diags.HasError() {
 		return iw.CostReportInput{}, diags
 	}
+	labelFilters, d := unitCostLabelFiltersFrom(ctx, cfg.UnitCostLabelFilter)
+	diags.Append(d...)
+	if diags.HasError() {
+		return iw.CostReportInput{}, diags
+	}
 
 	return iw.CostReportInput{
 		Name:        model.Name.ValueString(),
@@ -460,17 +596,37 @@ func costReportInputFrom(ctx context.Context, model costReportResourceModel) (iw
 			CostBasis:             stringPtr(cfg.CostBasis),
 			UnitCostMetricID:      stringPtr(cfg.UnitCostMetricID),
 			UnitCostMode:          stringPtr(cfg.UnitCostMode),
+			UnitCostScale:         int64Ptr(cfg.UnitCostScale),
+			UnitCostUsageUnit:     stringPtr(cfg.UnitCostUsageUnit),
+			UnitCostGroupByLabel:  stringPtr(cfg.UnitCostGroupByLabel),
+			UnitCostLabelFilters:  labelFilters,
 			Adjusted:              boolPtr(cfg.Adjusted),
+			Measure:               stringPtr(cfg.Measure),
+			UsageUnit:             stringPtr(cfg.UsageUnit),
+			Cumulative:            boolPtr(cfg.Cumulative),
+			XAxis:                 xAxisPtr(cfg.XAxis),
+			XAxisTagKey:           stringPtr(cfg.XAxisTagKey),
+			SegmentByDate:         boolPtr(cfg.SegmentByDate),
+			ComparisonStyle:       stringPtr(cfg.ComparisonStyle),
 		},
 	}, diags
+}
+
+// xAxisPtr sends a dimension and omits `date`: the wire spells the date axis
+// by leaving the field out, and the server's enum has no `date` member.
+func xAxisPtr(v types.String) *string {
+	if v.ValueString() == "date" {
+		return nil
+	}
+	return stringPtr(v)
 }
 
 // costReportStateFrom maps a server report into Terraform state.
 //
 // `prior` is the plan (on write) or the previous state (on refresh). It covers
 // the two graph-config fields the server omits from its response when they hold
-// their implicit default — `costBasis` and `adjusted` are omitempty on the wire
-// — where taking the response literally would write a null over a value the
+// their implicit default (`costBasis` and `adjusted` are omitempty on the wire)
+// where taking the response literally would write a null over a value the
 // config spells out and fail the apply as an inconsistent result.
 func costReportStateFrom(ctx context.Context, remote *iw.CostReport, prior costReportResourceModel) (costReportResourceModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
@@ -500,6 +656,12 @@ func costReportStateFrom(ctx context.Context, remote *iw.CostReport, prior costR
 		return costReportResourceModel{}, diags
 	}
 
+	labelFilters, d := unitCostLabelFiltersTo(ctx, remote.Config.UnitCostLabelFilters)
+	diags.Append(d...)
+	if diags.HasError() {
+		return costReportResourceModel{}, diags
+	}
+
 	costBasis := stringValue(remote.Config.CostBasis)
 	if costBasis.IsNull() {
 		costBasis = priorConfig.CostBasis
@@ -507,6 +669,35 @@ func costReportStateFrom(ctx context.Context, remote *iw.CostReport, prior costR
 	adjusted := boolValue(remote.Config.Adjusted)
 	if adjusted.IsNull() {
 		adjusted = priorConfig.Adjusted
+	}
+	// Same omitted-default rule for the display options: the server leaves out
+	// `measure`, `usageUnit` and `cumulative` when they hold their defaults, so a
+	// config spelling `measure = "cost"` or `cumulative = false` keeps its value.
+	measure := stringValue(remote.Config.Measure)
+	if measure.IsNull() {
+		measure = priorConfig.Measure
+	}
+	usageUnit := stringValue(remote.Config.UsageUnit)
+	if usageUnit.IsNull() {
+		usageUnit = priorConfig.UsageUnit
+	}
+	cumulative := boolValue(remote.Config.Cumulative)
+	if cumulative.IsNull() {
+		cumulative = priorConfig.Cumulative
+	}
+	// The axis options follow the same rule. `x_axis = "date"` is never on the
+	// wire at all, so an absent axis keeps whatever the config said.
+	xAxis := stringValue(remote.Config.XAxis)
+	if xAxis.IsNull() {
+		xAxis = priorConfig.XAxis
+	}
+	segmentByDate := boolValue(remote.Config.SegmentByDate)
+	if segmentByDate.IsNull() {
+		segmentByDate = priorConfig.SegmentByDate
+	}
+	comparisonStyle := stringValue(remote.Config.ComparisonStyle)
+	if comparisonStyle.IsNull() {
+		comparisonStyle = priorConfig.ComparisonStyle
 	}
 
 	config, d := types.ObjectValueFrom(ctx, costReportConfigAttrTypes, costReportConfigModel{
@@ -522,7 +713,18 @@ func costReportStateFrom(ctx context.Context, remote *iw.CostReport, prior costR
 		CostBasis:             costBasis,
 		UnitCostMetricID:      stringValue(remote.Config.UnitCostMetricID),
 		UnitCostMode:          stringValue(remote.Config.UnitCostMode),
+		UnitCostScale:         int64Value(remote.Config.UnitCostScale),
+		UnitCostUsageUnit:     stringValue(remote.Config.UnitCostUsageUnit),
+		UnitCostGroupByLabel:  stringValue(remote.Config.UnitCostGroupByLabel),
+		UnitCostLabelFilter:   labelFilters,
 		Adjusted:              adjusted,
+		Measure:               measure,
+		UsageUnit:             usageUnit,
+		Cumulative:            cumulative,
+		XAxis:                 xAxis,
+		XAxisTagKey:           stringValue(remote.Config.XAxisTagKey),
+		SegmentByDate:         segmentByDate,
+		ComparisonStyle:       comparisonStyle,
 		DateRange:             dateRange,
 		Filter:                filters,
 	})
@@ -538,4 +740,53 @@ func costReportStateFrom(ctx context.Context, remote *iw.CostReport, prior costR
 		FolderID:    stringValue(remote.FolderID),
 		Config:      config,
 	}, diags
+}
+
+/* ------------------------- unit-cost label filters ------------------------- */
+
+type unitCostLabelFilterModel struct {
+	Key    types.String `tfsdk:"key"`
+	Op     types.String `tfsdk:"op"`
+	Values types.List   `tfsdk:"values"`
+}
+
+var unitCostLabelFilterObjectType = types.ObjectType{AttrTypes: map[string]attr.Type{
+	"key":    types.StringType,
+	"op":     types.StringType,
+	"values": types.ListType{ElemType: types.StringType},
+}}
+
+func unitCostLabelFiltersFrom(ctx context.Context, list types.List) ([]iw.UnitCostLabelFilter, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if list.IsNull() || list.IsUnknown() {
+		return nil, diags
+	}
+	var models []unitCostLabelFilterModel
+	diags.Append(list.ElementsAs(ctx, &models, false)...)
+	out := make([]iw.UnitCostLabelFilter, 0, len(models))
+	for _, m := range models {
+		values, d := stringSlice(ctx, m.Values)
+		diags.Append(d...)
+		out = append(out, iw.UnitCostLabelFilter{Key: m.Key.ValueString(), Op: m.Op.ValueString(), Values: values})
+	}
+	return out, diags
+}
+
+// unitCostLabelFiltersTo returns an empty (not null) list when there are none:
+// an omitted block plans as an empty list, and null would diff against it.
+func unitCostLabelFiltersTo(ctx context.Context, filters []iw.UnitCostLabelFilter) (types.List, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	models := make([]unitCostLabelFilterModel, 0, len(filters))
+	for _, f := range filters {
+		values, d := stringList(ctx, f.Values)
+		diags.Append(d...)
+		models = append(models, unitCostLabelFilterModel{
+			Key:    types.StringValue(f.Key),
+			Op:     types.StringValue(f.Op),
+			Values: values,
+		})
+	}
+	list, d := types.ListValueFrom(ctx, unitCostLabelFilterObjectType, models)
+	diags.Append(d...)
+	return list, diags
 }

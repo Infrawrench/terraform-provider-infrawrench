@@ -13,7 +13,7 @@ import (
 // This test is the substitute for code generation.
 //
 // The provider's wire structs are hand-written, because two of the objects it
-// manages — scenario models and billing rules — are not in the checked-in
+// manages (scenario models and billing rules) are not in the checked-in
 // OpenAPI document at all, and the repository's SDK generator degrades exactly
 // the schemas this provider needs most (tagged unions become `any`, and
 // `readOnly` and `default` are dropped, which are precisely the signals that
@@ -58,29 +58,51 @@ func specChecks() []specCheck {
 		{
 			schema: "BudgetWithStatus",
 			value:  Budget{},
-			// This month's firing history. Operational state, not
-			// configuration — it would change under a plan that changes
-			// nothing.
-			ignored: []string{"currentMonthEvents"},
+			// This period's firing history, and where a parent's children
+			// currently outgrow it. Operational state, not configuration:
+			// both change under a plan that changes nothing.
+			ignored: []string{"currentMonthEvents", "hierarchyWarnings"},
 		},
 
 		{schema: "CostCentre", value: CostCentre{}},
 		{schema: "CostCentreInput", value: CostCentreInput{}},
+
+		{
+			schema: "CustomCostSource",
+			value:  CustomCostSource{},
+		},
+		{schema: "CustomCostSourceInput", value: CustomCostSourceInput{}},
 
 		{schema: "AllocationRule", value: AllocationRule{}},
 		{schema: "AllocationRuleInput", value: AllocationRuleInput{}},
 		{schema: "AllocationRuleMatch", value: AllocationRuleMatch{}},
 
 		{schema: "TagPolicy", value: TagPolicy{}},
+		{schema: "TagKeySettings", value: TagKeySettings{}},
 		{schema: "RequiredTag", value: RequiredTag{}},
 
 		{schema: "SavedCostFilter", value: SavedCostFilter{}},
 		{schema: "SavedCostFilterInput", value: SavedCostFilterInput{}},
 
+		{schema: "SavingsView", value: SavingsView{}},
+		{schema: "SavingsViewInput", value: SavingsViewInput{}},
+		{schema: "SavingsFindingFilter", value: SavingsFindingFilter{}},
+		{schema: "SavingsFindingSort", value: SavingsFindingSort{}},
+
 		{schema: "CostReport", value: CostReport{}},
 		{schema: "CostReportInput", value: CostReportInput{}},
 		{schema: "CostGraphConfig", value: CostGraphConfig{}},
+		{schema: "ResourceReport", value: ResourceReport{}},
+		{schema: "ResourceReportInput", value: ResourceReportInput{}},
+		{schema: "ResourceReportConfig", value: ResourceReportConfig{}},
+		{schema: "ResourceReportFilters", value: ResourceReportFilters{}},
+		{schema: "ResourceReportTagFilter", value: ResourceReportTagFilter{}},
+		{schema: "ResourceReportSort", value: ResourceReportSort{}},
 		{schema: "CostReportFolder", value: CostReportFolder{}},
+		{schema: "KubernetesEfficiencyReport", value: KubernetesEfficiencyReport{}},
+		{schema: "KubernetesEfficiencyReportInput", value: KubernetesEfficiencyReportInput{}},
+		{schema: "KubernetesEfficiencyConfig", value: KubernetesEfficiencyConfig{}},
+		{schema: "KubernetesEfficiencyFilter", value: CostFilter{}},
 		{schema: "CostReportFolderInput", value: CostReportFolderInput{}},
 
 		{schema: "CostAlert", value: CostAlert{}},
@@ -102,29 +124,106 @@ func specChecks() []specCheck {
 		{schema: "BillingRuleInput", value: BillingRuleInput{}},
 		{schema: "BillingRuleMatch", value: BillingRuleMatch{}},
 		{schema: "BillingRuleAdjustment", value: BillingRuleAdjustment{}},
+		{schema: "BillingRuleTier", value: BillingRuleTier{}},
+
+		// VirtualTag's `status` is an inline object rather than a named schema,
+		// so the deliberately undecoded `status.stats` never reaches this check.
+		{schema: "VirtualTag", value: VirtualTag{}},
+		{schema: "VirtualTagInput", value: VirtualTagInput{}},
+		{schema: "VirtualTagRule", value: VirtualTagRule{}},
+		{schema: "VirtualTagSource", value: VirtualTagSource{}},
+		{schema: "VirtualTagAllocation", value: VirtualTagAllocation{}},
 
 		{schema: "BusinessMetricInput", value: BusinessMetricInput{}},
 		{schema: "BusinessMetricScopeTerm", value: CostFilter{}},
 		{schema: "BusinessMetricCoverage", value: BusinessMetricCoverage{}},
-		{schema: "BusinessMetric", value: BusinessMetric{}},
+		{
+			schema: "BusinessMetric",
+			value:  BusinessMetric{},
+			// A read-only summary of the importer feeding the metric, which
+			// infrawrench_business_metric_importer manages as its own object.
+			ignored: []string{"importer"},
+		},
+		{schema: "BusinessMetricImporterInput", value: BusinessMetricImporterInput{}},
+		{schema: "BusinessMetricImporter", value: BusinessMetricImporter{}},
+		{schema: "BusinessMetricLabelMapping", value: BusinessMetricLabelMapping{}},
+		{schema: "UnitCostThreshold", value: UnitCostThreshold{}},
 
 		{schema: "CostAnnotation", value: CostAnnotation{}},
 		{schema: "CostAnnotationInput", value: CostAnnotationInput{}},
 
+		{schema: "CostForecast", value: CostForecast{}},
+		{schema: "CostForecastInput", value: CostForecastInput{}},
+
 		{schema: "ReportNotification", value: ReportNotification{}},
 		{schema: "ReportNotificationInput", value: ReportNotificationInput{}},
+		{schema: "DashboardNotification", value: DashboardNotification{}},
+		{schema: "DashboardNotificationInput", value: DashboardNotificationInput{}},
+		{schema: "CostReportAnomalyAlert", value: CostReportAnomalyAlert{}},
+		{schema: "CostReportAnomalyAlertInput", value: CostReportAnomalyAlertInput{}},
+		{schema: "CostReportAnomaly", value: CostReportAnomalyFinding{}},
+
+		// CostCanvasSpec and its block union are not checked: the provider
+		// carries the spec as raw JSON end to end, so there is no Go struct
+		// that could drop one of their properties.
+		{schema: "CostCanvas", value: CostCanvas{}},
+		{schema: "CostCanvasInput", value: CostCanvasInput{}},
+		{schema: "CostCanvasPlacement", value: CostCanvasPlacement{}},
+		{schema: "CostCanvasNotification", value: CostCanvasNotification{}},
 
 		{schema: "CostAnomalySettings", value: CostAnomalySettings{}},
+		{schema: "CostAnomalySuppression", value: CostAnomalySuppression{}},
+		{schema: "CostAnomalySuppressionInput", value: CostAnomalySuppressionInput{}},
 		{schema: "CostEfficiencySettings", value: CostEfficiencySettings{}},
+		{schema: "RealizedSavingsSettings", value: RealizedSavingsSettings{}},
+		{schema: "SeatSettings", value: SeatSettings{}},
 
 		{schema: "CurrencyConfig", value: CurrencyConfig{}},
 		{schema: "CurrencySettings", value: CurrencySettings{}},
+		{schema: "CurrencySettingsInput", value: CurrencySettings{}},
+		{schema: "FxFeedStatus", value: FxFeedStatus{}},
 		{schema: "ExchangeRate", value: ExchangeRate{}},
 		{schema: "ExchangeRateInput", value: ExchangeRateInput{}},
 
 		{schema: "SyntheticProbe", value: SyntheticProbe{}},
 		{schema: "SyntheticProbeCreate", value: SyntheticProbeCreate{}},
 		{schema: "SyntheticProbeUpdate", value: SyntheticProbeUpdate{}},
+
+		{schema: "Slo", value: Slo{}},
+		{schema: "SloCreate", value: SloInput{}},
+		{schema: "SloUpdate", value: SloInput{}},
+		{schema: "SloDetail", value: SloDetail{}, ignored: []string{
+			// Hourly good/total history and the freeze in effect: display data
+			// for the detail page, nothing the resource manages or diffs.
+			"buckets", "activeFreeze",
+		}},
+
+		{
+			schema: "Service",
+			value:  Service{},
+			// Each scorecard's current score and level on the service: the
+			// hourly evaluation's output, which changes without the service
+			// changing. Read per scorecard from the app, not from Terraform.
+			ignored: []string{"scores"},
+		},
+		{schema: "ServiceCreate", value: ServiceInput{}},
+		{schema: "ServiceUpdate", value: ServiceInput{}},
+		{schema: "ServiceLink", value: ServiceLink{}},
+		{schema: "ServiceMembershipRule", value: ServiceMembershipRule{}},
+		{schema: "ServiceDetail", value: ServiceDetail{}, ignored: []string{
+			// The resolved membership: rule matches against the current
+			// inventory plus hand-picked members, and the exclusions. It moves
+			// with every sync, and explicit membership is managed in the app,
+			// so neither the resource nor the data source keeps it; the data
+			// source reads Service.memberCount instead.
+			"members", "excluded",
+		}},
+
+		{schema: "Scorecard", value: Scorecard{}},
+		{schema: "ScorecardCreate", value: ScorecardInput{}},
+		{schema: "ScorecardUpdate", value: ScorecardInput{}},
+		{schema: "ScorecardCheck", value: ScorecardCheck{}},
+		{schema: "ScorecardLevel", value: ScorecardLevel{}},
 
 		{schema: "MetricAlertRule", value: MetricAlertRule{}},
 		{schema: "MetricAlertRuleInput", value: MetricAlertRuleInput{}},
@@ -136,7 +235,15 @@ func specChecks() []specCheck {
 		{schema: "StatusPageComponent", value: StatusPageComponent{}},
 		{schema: "StatusPageComponentInput", value: StatusPageComponentInput{}},
 
-		{schema: "SleepSchedule", value: SleepSchedule{}},
+		{
+			schema: "SleepSchedule",
+			value:  SleepSchedule{},
+			// Derived help text (provider CLI stop/start commands generated
+			// from the resource's synced fields), not configuration: it
+			// changes when the resource does, under a plan that changes
+			// nothing.
+			ignored: []string{"remediation"},
+		},
 		{schema: "SleepScheduleCreate", value: SleepScheduleCreate{}},
 		{schema: "SleepScheduleUpdate", value: SleepScheduleUpdate{}},
 
@@ -151,6 +258,38 @@ func specChecks() []specCheck {
 		{schema: "LogWorkspaceQueryCreate", value: LogWorkspaceQueryInput{}},
 		{schema: "LogWorkspaceQueryUpdate", value: LogWorkspaceQueryInput{}},
 		{schema: "LogStreamSelector", value: LogStreamSelector{}},
+
+		{schema: "CostVisibilityScope", value: CostVisibilityScope{}},
+		{schema: "CostVisibilityScopeInput", value: CostVisibilityScopeInput{}},
+		{schema: "ObjectAccessGrant", value: ObjectAccessGrant{}},
+		{schema: "ObjectSharing", value: ObjectSharing{}},
+		{schema: "ObjectSharingInput", value: ObjectSharingInput{}},
+		{schema: "RoleDefaultDashboard", value: RoleDefaultDashboard{}},
+		{schema: "SetDefaultDashboardRequest", value: SetDefaultDashboardRequest{}},
+
+		{
+			schema: "AiRequestSource",
+			value:  AIRequestSource{},
+			// Collection telemetry rather than configuration: the metadata keys
+			// the last run saw (with request counts) and the bytes its query
+			// scanned both change on every daily collection of a source nobody
+			// edited. The settings page and the CLI show them.
+			ignored: []string{"observedMetadataKeys", "lastQueryBytesScanned"},
+		},
+		{schema: "AiRequestSourceInput", value: AIRequestSourceInput{}},
+		{
+			schema: "AiRequestSourceKindOption",
+			value:  AIRequestSourceKindOption{},
+			// Picker presentation (labels, help text, the accounts that can
+			// supply the kind). The provider reads this listing only for the
+			// lookback cap, to recognise a clamped lookback_days.
+			ignored: []string{
+				"pluginName", "label", "description", "locationLabel",
+				"queriesBillable", "acceptsPrefix", "helpUrl", "accounts",
+			},
+		},
+		{schema: "AiAttributionDimension", value: AIAttributionDimension{}},
+		{schema: "AiAttributionDimensionInput", value: AIAttributionDimensionInput{}},
 
 		{schema: "RoleSummary", value: Role{}},
 		{schema: "RoleCreateRequest", value: RoleInput{}},
@@ -186,6 +325,12 @@ func specChecks() []specCheck {
 
 		{schema: "ManagedAccount", value: ManagedAccount{}},
 		{schema: "ManagedAccountInput", value: ManagedAccountInput{}},
+		{schema: "ManagedAccountPricing", value: ManagedAccountPricing{}},
+		{schema: "DiscountTreatment", value: DiscountTreatment{}},
+		{schema: "BillingProfile", value: BillingProfile{}},
+		{schema: "BillingProfileInput", value: BillingProfileInput{}},
+		{schema: "BillingProfileBank", value: BillingProfileBank{}},
+		{schema: "BillingProfileTaxRate", value: BillingProfileTaxRate{}},
 
 		{schema: "DeployTrigger", value: DeployTrigger{}},
 		{schema: "DeployTriggerInput", value: DeployTriggerInput{}},
@@ -193,6 +338,9 @@ func specChecks() []specCheck {
 		{schema: "SlackStatus", value: SlackStatus{}},
 		{schema: "SlackInstallation", value: SlackInstallation{}},
 		{schema: "SlackChannel", value: SlackChannel{}},
+		{schema: "EventSubscription", value: EventSubscription{}},
+		{schema: "EventSubscriptionInput", value: EventSubscriptionInput{}},
+		{schema: "EventSubscriptionWithSecret", value: EventSubscriptionWithSecret{}},
 		{schema: "SlackChannelCreate", value: SlackChannelCreate{}},
 		{schema: "SlackChannelUpdate", value: SlackChannelUpdate{}},
 
@@ -215,25 +363,91 @@ func specChecks() []specCheck {
 		},
 		{schema: "AlertRuleInput", value: AlertRuleInput{}},
 		{schema: "AlertRulesResponse", value: AlertRulesResponse{}},
+
+		// Shared by budgets, cost change alerts, anomaly settings and
+		// efficiency settings; each of those checks also sees the field.
+		{schema: "AlertEmailRecipients", value: AlertEmailRecipients{}},
+		{schema: "AlertEmailMember", value: AlertEmailMember{}},
+		{schema: "AlertEmailOptions", value: AlertEmailOptions{}},
+		{schema: "AlertEmailSettings", value: AlertEmailSettings{}},
+		{schema: "AlertEmailSettingsView", value: AlertEmailSettingsView{}},
+		{schema: "AlertEmailSuppression", value: AlertEmailSuppression{}},
+
+		{schema: "JitPolicy", value: JitPolicy{}},
+		{schema: "JitPolicyInput", value: JitPolicyInput{}},
+		{schema: "JitPolicyTarget", value: JitPolicyTarget{}},
+		{schema: "OnCallSchedule", value: OnCallSchedule{}},
+		{schema: "OnCallScheduleCreate", value: OnCallScheduleCreate{}},
+		{schema: "OnCallScheduleUpdate", value: OnCallScheduleUpdate{}},
+		{schema: "PagingProviderSettings", value: PagingProviderSettings{}},
+		{
+			schema: "PagingProviderAccount",
+			value:  PagingProviderAccount{},
+			// Capability labels for the Incidents tab (what the provider calls
+			// an incident, and whether one can be acknowledged or resolved from
+			// Infrawrench). No Terraform attribute derives from them.
+			ignored: []string{"incidents"},
+		},
+		{schema: "OnCallParticipant", value: OnCallParticipant{}},
 		{schema: "QuietHours", value: QuietHours{}},
 		{schema: "EscalationPolicy", value: EscalationPolicy{}},
 
 		{schema: "DriftAlertSettings", value: DriftAlertSettings{}},
 		{schema: "DriftAlertSettingsUpdate", value: DriftAlertSettingsUpdate{}},
+		{schema: "DoraSettings", value: DoraSettings{}},
+		{schema: "DoraSettingsUpdate", value: DoraSettingsUpdate{}},
 		{schema: "ExpiryAlertSettings", value: ExpiryAlertSettings{}},
 		{schema: "ExpiryAlertSettingsUpdate", value: ExpiryAlertSettingsUpdate{}},
+		{schema: "ExtendedSupportSettings", value: ExtendedSupportSettings{}},
+		{schema: "ExtendedSupportSettingsUpdate", value: ExtendedSupportSettingsUpdate{}},
+		{schema: "IdleFindingSettings", value: IdleFindingSettings{}},
+		{schema: "IdleFindingSettingsUpdate", value: IdleFindingSettingsUpdate{}},
+		{schema: "IdleRuleOverride", value: IdleRuleOverride{}},
 		{schema: "PostureAlertSettings", value: PostureAlertSettings{}},
 		{schema: "PostureAlertSettingsUpdate", value: PostureAlertSettingsUpdate{}},
+		{schema: "VulnerabilitySettings", value: VulnerabilityAlertSettings{}},
+		{schema: "VulnerabilitySettingsUpdate", value: VulnerabilityAlertSettingsUpdate{}},
 		{schema: "SessionRecordingSettings", value: SessionRecordingSettings{}},
 		{schema: "SessionRecordingSettingsUpdate", value: SessionRecordingSettingsUpdate{}},
 		{schema: "SessionRecordingUsage", value: SessionRecordingUsage{}},
 
 		{schema: "NetworkFlowSettings", value: NetworkFlowSettings{}},
+		{schema: "KubernetesNetworkSettings", value: KubernetesNetworkSettings{}},
+		{schema: "NetworkFlowReport", value: NetworkFlowReport{}},
+		{schema: "NetworkFlowReportInput", value: NetworkFlowReportInput{}},
+		{schema: "NetworkFlowReportConfig", value: NetworkFlowReportConfig{}},
+		{schema: "NetworkFlowReportFilters", value: NetworkFlowReportFilters{}},
 
 		{schema: "JiraIntegration", value: JiraIntegration{}},
 		{schema: "JiraIntegrationInput", value: JiraIntegrationInput{}},
 		{schema: "LinearIntegration", value: LinearIntegration{}},
 		{schema: "LinearIntegrationInput", value: LinearIntegrationInput{}},
+
+		// GithubIssueRoute and GithubIacSource are `allOf` extensions of their
+		// Input schemas (adding a required id) and GithubIssueRouteMatch is a
+		// `oneOf`, so none of the three has top-level properties to compare;
+		// the Input schemas below carry every field they do.
+		{schema: "GithubIssueSettings", value: GithubIssueSettings{}},
+		{schema: "GithubIssueSettingsInput", value: GithubIssueSettingsInput{}},
+		{schema: "GithubIssueRouteInput", value: GithubIssueRoute{}},
+		{schema: "GithubIacSourceInput", value: GithubIacSource{}},
+		{schema: "GithubRepoRef", value: GithubRepoRef{}},
+		// PrCheckRepository is an `allOf` extension of its Input (adding the
+		// id and timestamps); the Go struct decodes every Input field.
+		{schema: "PrCheckRepositoryInput", value: PrCheckRepository{}},
+		{schema: "ComplianceControlSetting", value: ComplianceControlSetting{}},
+		{schema: "ComplianceControlSettingInput", value: ComplianceControlSettingInput{}},
+		{schema: "CompliancePackSchedule", value: CompliancePackSchedule{}},
+		{schema: "CompliancePackScheduleInput", value: CompliancePackScheduleInput{}},
+		{
+			schema: "GithubIssuesStatus",
+			value:  GithubIssuesStatus{},
+			// What each GitHub App installation has accepted. GitHub-side state
+			// an owner approves on GitHub, not configuration Terraform can write.
+			// Whether the server verifies the GitHub App webhook, and its URL:
+			// deployment state set by whoever runs the server, not by an org.
+			ignored: []string{"installations", "webhookConfigured", "webhookUrl"},
+		},
 
 		{
 			schema: "WorkflowSchedule",
@@ -244,13 +458,20 @@ func specChecks() []specCheck {
 		},
 		{schema: "WorkflowScheduleInput", value: WorkflowScheduleInput{}},
 
-		{schema: "Account", value: Account{}},
+		{
+			schema: "Account",
+			value:  Account{},
+			// Server-managed provider OAuth connection state. It changes when
+			// a provider revokes a grant, and fixing it means a browser
+			// consent Terraform cannot run, so it has no place in state.
+			ignored: []string{"oauthStatus"},
+		},
 		{
 			schema: "Resource",
 			value:  Resource{},
 			// Unbounded provider-shaped blobs. Putting them in state would write
-			// a resource's whole configuration — including anything sensitive in
-			// it — into every state file that lists resources.
+			// a resource's whole configuration (including anything sensitive in
+			// it) into every state file that lists resources.
 			ignored: []string{"fieldsJson", "outputsJson"},
 		},
 		{schema: "OrgMember", value: OrgMember{}},
@@ -260,8 +481,9 @@ func specChecks() []specCheck {
 			// logoSvg is multi-kilobyte markup and credentialFields/preflight
 			// describe a UI form. None of it belongs in Terraform state, so the
 			// plugins data source drops all three rather than bloating every
-			// state file that reads it.
-			ignored: []string{"logoSvg", "credentialFields", "preflight"},
+			// state file that reads it. oauth describes the "Connect with X"
+			// button, a browser consent flow Terraform cannot drive.
+			ignored: []string{"logoSvg", "credentialFields", "preflight", "oauth"},
 		},
 	}
 }
@@ -272,8 +494,8 @@ func specChecks() []specCheck {
 // listed here so the gap is visible rather than merely absent, and so that
 // regenerating the spec makes this test start covering them.
 //
-// It is empty as of the 1.9.0 regeneration, which brought scenario models and
-// billing rules into the document. Keeping the list and its test rather than
+// It is empty as of the 1.76.0 regeneration, which brought the paging-provider
+// schemas into the document. Keeping the list and its test rather than
 // deleting them is deliberate: the next object added ahead of a spec refresh
 // goes here, and the test then says out loud when the refresh catches up.
 var schemasKnownAbsent = []string{}

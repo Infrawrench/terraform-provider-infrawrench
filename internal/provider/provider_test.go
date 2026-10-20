@@ -11,13 +11,13 @@ import (
 )
 
 // wantResources and wantDataSources are the registry's expected size, asserted
-// from two directions — the Go constructors here, and the served gRPC schema in
+// from two directions: the Go constructors here, and the served gRPC schema in
 // schema_validation_test.go. They are deliberately hand-maintained: the number
 // is the reminder that adding a resource also means adding a row to the
 // README's table and to the docs page, neither of which any test can check.
 const (
-	wantResources   = 46
-	wantDataSources = 6
+	wantResources   = 85
+	wantDataSources = 8
 )
 
 // These are unit tests over the provider's wiring, not acceptance tests: nothing
@@ -70,18 +70,21 @@ func TestResourcesAndDataSourcesConstruct(t *testing.T) {
 		t.Errorf("provider exposes %d data sources, want %d", len(dataSources), wantDataSources)
 	}
 
-	// A duplicated TypeName is a real bug — the second registration silently
+	// A duplicated TypeName is a real bug: the second registration silently
 	// shadows the first, and the framework only notices when the plugin is
 	// served. Collecting the names into a set catches a copy-pasted Metadata.
+	// The set is per kind: a resource and a data source may share a name
+	// (`infrawrench_service` is both), since Terraform addresses them in
+	// separate namespaces.
 	seen := map[string]bool{}
 	check := func(kind, typeName string) {
 		if !strings.HasPrefix(typeName, "infrawrench_") {
 			t.Errorf("%s type name %q is not prefixed with %q", kind, typeName, "infrawrench_")
 		}
-		if seen[typeName] {
+		if seen[kind+"/"+typeName] {
 			t.Errorf("%s type name %q is registered twice", kind, typeName)
 		}
-		seen[typeName] = true
+		seen[kind+"/"+typeName] = true
 	}
 
 	for _, newResource := range resources {

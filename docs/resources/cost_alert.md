@@ -29,10 +29,16 @@ When the alert last ran and when it last fired are evaluation state, not configu
 
 ### Optional
 
+- `email_addresses` (Set of String) Extra addresses to email when the alert fires: a `finance@` alias, or someone without a login. At most 20. Each must pass the organization's external-address policy (`infrawrench_alert_email_settings`), checked when saved and again when sent. Emailed **in addition to** whatever the organization's `infrawrench_alert_routing` rules decide, whether or not a rule matched, and never held by quiet hours.
+
+Optional and computed: leave it out and the list is managed elsewhere (removing it from configuration leaves the stored list unchanged); set `[]` to clear it.
+- `email_member_ids` (Set of String) Organization members to email when the alert fires, by user id from the `infrawrench_members` data source. At most 50. The member's current login address is read when the alert is sent, so an address change follows them and a member who leaves stops receiving. Emailed **in addition to** whatever the organization's `infrawrench_alert_routing` rules decide, whether or not a rule matched, and never held by quiet hours.
+
+Optional and computed: leave it out and the list is managed elsewhere (removing it from configuration leaves the stored list unchanged); set `[]` to clear it.
 - `enabled` (Boolean) Whether the alert is evaluated. Defaults to `true`. Set it to `false` to silence an alert without losing its definition.
 - `filter` (Block List) Restricts the alert to matching spend. Clauses are ANDed. (see [below for nested schema](#nestedblock--filter))
-- `group_by` (String) Evaluate the thresholds per value of this dimension rather than against the total, so a spike in one account or service is not diluted by the rest. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`. Leave unset to alert on the total.
-- `group_by_tag_key` (String) Which tag to group by. Required when `group_by` is `tag`, and rejected otherwise.
+- `group_by` (String) Evaluate the thresholds per value of this dimension rather than against the total, so a spike in one account or service is not diluted by the rest. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`, `virtual_tag`. Leave unset to alert on the total.
+- `group_by_tag_key` (String) Which tag to group by: a provider tag key when `group_by` is `tag`, or a virtual tag key when it is `virtual_tag`. Required for those two and rejected otherwise.
 - `threshold_amount_cents` (Number) Fire when spend changes by at least this many minor currency units. Must be greater than zero. Set this, `threshold_percent`, or both.
 - `threshold_percent` (Number) Fire when spend changes by at least this percentage, 1–10000. Set this, `threshold_amount_cents`, or both.
 
@@ -45,13 +51,13 @@ When the alert last ran and when it last fired are evaluation state, not configu
 
 Required:
 
-- `dimension` (String) Cost dimension to filter on. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`.
-- `op` (String) `in` to keep matching rows, `not_in` to exclude them.
-- `values` (List of String) Values to match. Must not be empty.
+- `dimension` (String) Cost dimension to filter on. One of `provider`, `account`, `service`, `region`, `resource`, `tag`, `charge_type`, `commitment`, `virtual_tag`.
+- `op` (String) How the dimension is compared with `values`. `in` keeps rows equal to a value and `not_in` excludes them. `flexible_match` compares after ignoring letter case, whitespace, `_` and `-`, so `Prod_Env` matches `prod-env`. `contains`, `not_contains` and `starts_with` are substring and prefix tests that ignore letter case. Each matches when any value does (`not_in` and `not_contains`: when none does). `is_set` and `is_not_set` test whether a `tag` or `virtual_tag` has a value at all. One of `in`, `not_in`, `flexible_match`, `contains`, `not_contains`, `starts_with`, `is_set`, `is_not_set`.
+- `values` (List of String) Values to compare with. At least one, except for `is_set` and `is_not_set`, which take an empty list (`values = []`). The text operators refuse an empty string.
 
 Optional:
 
-- `tag_key` (String) Tag key, required when `dimension` is `tag` and rejected otherwise.
+- `tag_key` (String) Tag key, required when `dimension` is `tag` (a provider tag key) or `virtual_tag` (a virtual tag key, see `infrawrench_virtual_tag`) and rejected otherwise.
 
 ## Import
 

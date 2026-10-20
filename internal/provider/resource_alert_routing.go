@@ -59,9 +59,15 @@ type alertConditionModel struct {
 }
 
 type alertDestinationModel struct {
-	Kind      types.String `tfsdk:"kind"`
-	ChannelID types.String `tfsdk:"channel_id"`
-	WebhookID types.String `tfsdk:"webhook_id"`
+	Kind       types.String `tfsdk:"kind"`
+	ChannelID  types.String `tfsdk:"channel_id"`
+	WebhookID  types.String `tfsdk:"webhook_id"`
+	ScheduleID types.String `tfsdk:"schedule_id"`
+	UserID     types.String `tfsdk:"user_id"`
+	Address    types.String `tfsdk:"address"`
+	AccountID  types.String `tfsdk:"account_id"`
+	TargetID   types.String `tfsdk:"target_id"`
+	SourceID   types.String `tfsdk:"source_id"`
 }
 
 type alertQuietHoursModel struct {
@@ -87,9 +93,15 @@ var alertConditionAttrTypes = map[string]attr.Type{
 }
 
 var alertDestinationAttrTypes = map[string]attr.Type{
-	"kind":       types.StringType,
-	"channel_id": types.StringType,
-	"webhook_id": types.StringType,
+	"kind":        types.StringType,
+	"channel_id":  types.StringType,
+	"webhook_id":  types.StringType,
+	"schedule_id": types.StringType,
+	"user_id":     types.StringType,
+	"address":     types.StringType,
+	"account_id":  types.StringType,
+	"target_id":   types.StringType,
+	"source_id":   types.StringType,
 }
 
 var (
@@ -136,11 +148,12 @@ var (
 		"in", "notIn", "gte", "eq", "lt", "contains", "notContains",
 	}
 	alertSeverities      = []string{"info", "warning", "critical"}
-	alertDestinationKind = []string{"push", "slack", "msteams"}
+	alertDestinationKind = []string{"push", "slack", "msteams", "on-call", "github-issues", "email-member", "email-address", "paging-provider", "provider-on-call"}
 	alertTriggers        = []string{
 		"syncIncidents", "budgetAlerts", "anomalyAlerts", "costChangeAlerts", "commitmentExpiryAlerts",
-		"commitmentIdleAlerts", "unitCostRegressionAlerts", "metricAlerts", "resourceDrift", "workflowPages",
-		"providerIncidents", "expiryAlerts", "logMatchAlerts", "postureAlerts", "probeAlerts", "weeklyDigest",
+		"commitmentIdleAlerts", "unitCostRegressionAlerts", "savingsFindings", "metricAlerts", "resourceDrift", "workflowPages",
+		"providerIncidents", "expiryAlerts", "logMatchAlerts", "postureAlerts", "vulnerabilityAlerts", "probeAlerts", "sloAlerts", "scorecardAlerts", "quotaAlerts",
+		"extendedSupportAlerts", "incidentAlerts", "leakedSecretAlerts", "weeklyDigest",
 	}
 )
 
@@ -151,7 +164,7 @@ func (r *alertRoutingResource) Metadata(_ context.Context, req resource.Metadata
 func (r *alertRoutingResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "The organization's alert routing table: which alerts go to which Slack channels, " +
-			"Teams webhooks and phones.\n\n" +
+			"Teams webhooks, phones, on-call rotations, GitHub issues and email recipients.\n\n" +
 			"**One resource holds every rule, in order**, because order is the semantics. The list is " +
 			"evaluated top to bottom and is first-match-wins unless a rule sets `continue_on_match`, which " +
 			"is what lets a narrow rule sit above a broad one. A rule cannot meaningfully be written " +
@@ -267,7 +280,23 @@ func (r *alertRoutingResource) Schema(_ context.Context, _ resource.SchemaReques
 										MarkdownDescription: "One of `" + joinBackticked(alertDestinationKind) + "`. " +
 											"`push` reaches the organization's phones, still filtered by each " +
 											"member's own mutes — an organization rule decides whether the org is " +
-											"told, a member decides whether their phone rings.",
+											"told, a member decides whether their phone rings.\n\n" +
+											"`github-issues` files the alert's finding as a GitHub issue, in the " +
+											"repository `infrawrench_github_issue_settings` routes it to, and " +
+											"comments on the open issue instead when one already exists for that " +
+											"finding. It takes no id. Only alerts that carry a finding (savings " +
+											"findings, cost anomalies, idle commitments) can be filed; for any other " +
+											"trigger the destination is skipped, and it does nothing while GitHub " +
+											"issue filing is disabled. `email-member` and `email-address` send an " +
+											"email; email has no acknowledge button, so a rule routed only to email " +
+											"always escalates.\n\n" +
+											"`paging-provider` opens an alert on a PagerDuty service or an " +
+											"incident.io alert source through a connected account, under a stable " +
+											"dedup key: the alert's own recovery resolves it upstream, an " +
+											"acknowledgement in Infrawrench acknowledges it, and an acknowledgement " +
+											"upstream settles the Infrawrench escalation. `provider-on-call` pushes " +
+											"to whoever is on call on a provider schedule or escalation policy, " +
+											"matched to members by email when the alert fires.",
 										Validators: []validatorString{oneOfValidator(alertDestinationKind...)},
 									},
 									"channel_id": schema.StringAttribute{
@@ -279,6 +308,46 @@ func (r *alertRoutingResource) Schema(_ context.Context, _ resource.SchemaReques
 										Optional: true,
 										MarkdownDescription: "Required when `kind` is `msteams`: the `id` of an " +
 											"`infrawrench_msteams_webhook`.",
+									},
+									"schedule_id": schema.StringAttribute{
+										Optional: true,
+										MarkdownDescription: "Required when `kind` is `on-call`: the `id` of an " +
+											"`infrawrench_on_call_schedule`. The rule then reaches whoever is " +
+											"holding that rotation when the alert fires, rather than a person " +
+											"named when the rule was written. A disabled rotation contributes " +
+											"nobody and the rule's other destinations still deliver.",
+									},
+									"user_id": schema.StringAttribute{
+										Optional: true,
+										MarkdownDescription: "Required when `kind` is `email-member`: a member's `id` " +
+											"from the `infrawrench_members` data source. The member's current " +
+											"login address is resolved when the alert is sent, so an address " +
+											"change follows them and a member who leaves stops receiving.",
+									},
+									"address": schema.StringAttribute{
+										Optional: true,
+										MarkdownDescription: "Required when `kind` is `email-address`: a literal " +
+											"address such as a `finance@` alias. It must pass the organization's " +
+											"external-address policy (`infrawrench_alert_email_settings`), checked " +
+											"when the rules are saved and again when the alert is sent.",
+									},
+									"account_id": schema.StringAttribute{
+										Optional: true,
+										MarkdownDescription: "Required when `kind` is `paging-provider` or " +
+											"`provider-on-call`: the `id` of a connected account whose provider " +
+											"can page (PagerDuty, incident.io).",
+									},
+									"target_id": schema.StringAttribute{
+										Optional: true,
+										MarkdownDescription: "Required when `kind` is `paging-provider`: the " +
+											"provider's id for the target, a PagerDuty service id or an incident.io " +
+											"HTTP alert source id. The routing key or source token is looked up by " +
+											"the account, never stored on the rule.",
+									},
+									"source_id": schema.StringAttribute{
+										Optional: true,
+										MarkdownDescription: "Required when `kind` is `provider-on-call`: the " +
+											"provider's id for a schedule or escalation policy.",
 									},
 								},
 							},
@@ -323,7 +392,7 @@ func (r *alertRoutingResource) Schema(_ context.Context, _ resource.SchemaReques
 							MarkdownDescription: "Notify a second set of destinations if nobody acknowledges within " +
 								"`after_minutes`.\n\n" +
 								"Acknowledgement comes from the button on the Slack message, so a rule routed only " +
-								"to Teams or to push will **always** escalate. Omit the block for a rule that " +
+								"to Teams, to push or to email will **always** escalate. Omit the block for a rule that " +
 								"never escalates.",
 							Attributes: map[string]schema.Attribute{
 								"after_minutes": schema.Int64Attribute{
@@ -350,6 +419,34 @@ func (r *alertRoutingResource) Schema(_ context.Context, _ resource.SchemaReques
 											"webhook_id": schema.StringAttribute{
 												Optional:            true,
 												MarkdownDescription: "Required when `kind` is `msteams`.",
+											},
+											"schedule_id": schema.StringAttribute{
+												Optional:            true,
+												MarkdownDescription: "Required when `kind` is `on-call`.",
+											},
+											"user_id": schema.StringAttribute{
+												Optional: true,
+												MarkdownDescription: "Required when `kind` is `email-member`: a member's " +
+													"`id` from `infrawrench_members`, resolved to their current login " +
+													"address at send time.",
+											},
+											"address": schema.StringAttribute{
+												Optional: true,
+												MarkdownDescription: "Required when `kind` is `email-address`. Must pass " +
+													"the organization's external-address policy.",
+											},
+											"account_id": schema.StringAttribute{
+												Optional: true,
+												MarkdownDescription: "Required when `kind` is `paging-provider` or " +
+													"`provider-on-call`: a paging provider account `id`.",
+											},
+											"target_id": schema.StringAttribute{
+												Optional:            true,
+												MarkdownDescription: "Required when `kind` is `paging-provider`.",
+											},
+											"source_id": schema.StringAttribute{
+												Optional:            true,
+												MarkdownDescription: "Required when `kind` is `provider-on-call`.",
 											},
 										},
 									},
@@ -593,9 +690,15 @@ func alertDestinationsFrom(ctx context.Context, list types.List) ([]iw.AlertDest
 
 	for _, b := range blocks {
 		out = append(out, iw.AlertDestination{
-			Kind:      b.Kind.ValueString(),
-			ChannelID: stringPtr(b.ChannelID),
-			WebhookID: stringPtr(b.WebhookID),
+			Kind:       b.Kind.ValueString(),
+			ChannelID:  stringPtr(b.ChannelID),
+			WebhookID:  stringPtr(b.WebhookID),
+			ScheduleID: stringPtr(b.ScheduleID),
+			UserID:     stringPtr(b.UserID),
+			Address:    stringPtr(b.Address),
+			AccountID:  stringPtr(b.AccountID),
+			TargetID:   stringPtr(b.TargetID),
+			SourceID:   stringPtr(b.SourceID),
 		})
 	}
 	return out, diags
@@ -605,7 +708,7 @@ func alertDestinationsFrom(ctx context.Context, list types.List) ([]iw.AlertDest
 //
 // `position` is dropped: it is the list's own index, so storing it would be
 // recording the same fact twice and inviting the two to disagree. Everything
-// else the route carries is surfaced, quiet hours and escalation included —
+// else the route carries is surfaced, quiet hours and escalation included:
 // anything this resource failed to read back would be written away as null on
 // the next apply, because the write is a whole-list replacement.
 func alertRoutingStateFrom(ctx context.Context, orgID string, rules []iw.AlertRule) (alertRoutingResourceModel, diag.Diagnostics) {
@@ -632,9 +735,15 @@ func alertRoutingStateFrom(ctx context.Context, orgID string, rules []iw.AlertRu
 		destinations := make([]alertDestinationModel, 0, len(rule.Destinations))
 		for _, dest := range rule.Destinations {
 			destinations = append(destinations, alertDestinationModel{
-				Kind:      types.StringValue(dest.Kind),
-				ChannelID: stringValue(dest.ChannelID),
-				WebhookID: stringValue(dest.WebhookID),
+				Kind:       types.StringValue(dest.Kind),
+				ChannelID:  stringValue(dest.ChannelID),
+				WebhookID:  stringValue(dest.WebhookID),
+				ScheduleID: stringValue(dest.ScheduleID),
+				UserID:     stringValue(dest.UserID),
+				Address:    stringValue(dest.Address),
+				AccountID:  stringValue(dest.AccountID),
+				TargetID:   stringValue(dest.TargetID),
+				SourceID:   stringValue(dest.SourceID),
 			})
 		}
 		destinationList, d := types.ListValueFrom(ctx, alertDestinationObjectType, destinations)
@@ -705,9 +814,15 @@ func alertEscalationTo(ctx context.Context, escalation *iw.EscalationPolicy) (ty
 	destinations := make([]alertDestinationModel, 0, len(escalation.Destinations))
 	for _, dest := range escalation.Destinations {
 		destinations = append(destinations, alertDestinationModel{
-			Kind:      types.StringValue(dest.Kind),
-			ChannelID: stringValue(dest.ChannelID),
-			WebhookID: stringValue(dest.WebhookID),
+			Kind:       types.StringValue(dest.Kind),
+			ChannelID:  stringValue(dest.ChannelID),
+			WebhookID:  stringValue(dest.WebhookID),
+			ScheduleID: stringValue(dest.ScheduleID),
+			UserID:     stringValue(dest.UserID),
+			Address:    stringValue(dest.Address),
+			AccountID:  stringValue(dest.AccountID),
+			TargetID:   stringValue(dest.TargetID),
+			SourceID:   stringValue(dest.SourceID),
 		})
 	}
 	list, d := types.ListValueFrom(ctx, alertDestinationObjectType, destinations)

@@ -4,14 +4,14 @@ page_title: "infrawrench_anomaly_settings Resource - infrawrench"
 subcategory: ""
 description: |-
   Organization-wide tuning for cost anomaly detection: how far above its own trailing mean a spend line has to go before it is called a spike, and how much money has to be involved before anyone is told.
-  This is an organization singleton — one row that always exists. terraform destroy therefore restores the shipped defaults rather than deleting anything, because an organization with no anomaly settings is not a state the API can be in.
+  This is an organization singleton — one row that always exists. terraform destroy therefore restores the shipped defaults rather than deleting anything, because an organization with no anomaly settings is not a state the API can be in. The email recipients are cleared as part of that reset.
 ---
 
 # infrawrench_anomaly_settings (Resource)
 
 Organization-wide tuning for cost anomaly detection: how far above its own trailing mean a spend line has to go before it is called a spike, and how much money has to be involved before anyone is told.
 
-This is an organization **singleton** — one row that always exists. `terraform destroy` therefore restores the shipped defaults rather than deleting anything, because an organization with no anomaly settings is not a state the API can be in.
+This is an organization **singleton** — one row that always exists. `terraform destroy` therefore restores the shipped defaults rather than deleting anything, because an organization with no anomaly settings is not a state the API can be in. The email recipients are cleared as part of that reset.
 
 
 
@@ -26,6 +26,18 @@ This is an organization **singleton** — one row that always exists. `terraform
 - `sms_alerts` (String) Which anomalies also text the organization's Twilio recipients. One of `off`, `new_source`, `all`.
 
 `off` is the default: an organization with Twilio configured for budgets does not start receiving anomaly texts until it asks to. `new_source` texts only about spend appearing from nothing, which is what a leaked key looks like on a bill. Delivery is batched — one SMS per detection pass, at most one every six hours — and never places a voice call. Push, Slack and Teams delivery is unaffected by this setting.
+
+### Optional
+
+- `email_addresses` (Set of String) Extra addresses to email when an anomaly is detected: a `finance@` alias, or someone without a login. At most 20. Each must pass the organization's external-address policy (`infrawrench_alert_email_settings`), checked when saved and again when sent. Emailed **in addition to** whatever the organization's `infrawrench_alert_routing` rules decide, whether or not a rule matched, and never held by quiet hours.
+
+Optional and computed: leave it out and the list is managed elsewhere (removing it from configuration leaves the stored list unchanged); set `[]` to clear it.
+- `email_member_ids` (Set of String) Organization members to email when an anomaly is detected, by user id from the `infrawrench_members` data source. At most 50. The member's current login address is read when the alert is sent, so an address change follows them and a member who leaves stops receiving. Emailed **in addition to** whatever the organization's `infrawrench_alert_routing` rules decide, whether or not a rule matched, and never held by quiet hours.
+
+Optional and computed: leave it out and the list is managed elsewhere (removing it from configuration leaves the stored list unchanged); set `[]` to clear it.
+- `feedback_tuning` (Boolean) Whether repeated `expected` feedback on a provider or service raises its spike threshold. Each `expected` verdict after the first within 90 days adds half a standard deviation to that key's `sigmas`, at most +2 in total and never past 10, and any `unexpected` verdict on the same key in that window cancels the nudge. The default is `true`, and omitting the attribute applies that default.
+
+Turning it off stops feedback from moving any key's threshold; verdicts are still recorded, and `infrawrench_anomaly_suppression` objects still apply, because a suppression is an explicit decision with an expiry rather than a learned adjustment.
 
 ### Read-Only
 

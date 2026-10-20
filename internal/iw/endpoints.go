@@ -18,7 +18,7 @@ import (
 //
 //   - Objects without one (cost centres, allocation rules, report folders) are
 //     read by listing and filtering client-side. Those wrappers synthesise the
-//     404 themselves — notFound below — so that a deletion outside Terraform
+//     404 themselves (notFound below) so that a deletion outside Terraform
 //     still reaches the caller as IsNotFound and lands as "needs recreating"
 //     rather than as an opaque error or, worse, silent success.
 func notFound(method, path, id string) error {
@@ -76,7 +76,7 @@ func (c *Client) ListCostCentres(ctx context.Context) ([]CostCentre, error) {
 	return out, err
 }
 
-// GetCostCentre lists and filters — there is no GET /cost-centres/{id}.
+// GetCostCentre lists and filters: there is no GET /cost-centres/{id}.
 func (c *Client) GetCostCentre(ctx context.Context, id string) (*CostCentre, error) {
 	all, err := c.ListCostCentres(ctx)
 	if err != nil {
@@ -118,7 +118,7 @@ func (c *Client) ListAllocationRules(ctx context.Context) ([]AllocationRule, err
 	return out, err
 }
 
-// GetAllocationRule lists and filters — there is no GET for a single rule.
+// GetAllocationRule lists and filters: there is no GET for a single rule.
 func (c *Client) GetAllocationRule(ctx context.Context, id string) (*AllocationRule, error) {
 	all, err := c.ListAllocationRules(ctx)
 	if err != nil {
@@ -170,13 +170,25 @@ func (c *Client) PutTagPolicy(ctx context.Context, in TagPolicy) (*TagPolicy, er
 	return &out, nil
 }
 
-/* ------------------------------ saved filters ------------------------------ */
+/* ----------------------------- tag key settings ---------------------------- */
 
-func (c *Client) ListSavedFilters(ctx context.Context) ([]SavedCostFilter, error) {
-	var out []SavedCostFilter
-	err := c.Get(ctx, "/saved-cost-filters", &out)
-	return out, err
+func (c *Client) GetTagKeySettings(ctx context.Context) (*TagKeySettings, error) {
+	var out TagKeySettings
+	if err := c.Get(ctx, "/tag-keys/settings", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
+
+func (c *Client) PutTagKeySettings(ctx context.Context, in TagKeySettings) (*TagKeySettings, error) {
+	var out TagKeySettings
+	if err := c.Put(ctx, "/tag-keys/settings", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+/* ------------------------------ saved filters ------------------------------ */
 
 func (c *Client) GetSavedFilter(ctx context.Context, id string) (*SavedCostFilter, error) {
 	var out SavedCostFilter
@@ -206,13 +218,37 @@ func (c *Client) DeleteSavedFilter(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/saved-cost-filters/"+seg(id))
 }
 
-/* ------------------------------- cost reports ------------------------------ */
+/* ------------------------------ savings views ------------------------------ */
 
-func (c *Client) ListCostReports(ctx context.Context) ([]CostReport, error) {
-	var out []CostReport
-	err := c.Get(ctx, "/cost-reports", &out)
-	return out, err
+func (c *Client) GetSavingsView(ctx context.Context, id string) (*SavingsView, error) {
+	var out SavingsView
+	if err := c.Get(ctx, "/savings-views/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
+
+func (c *Client) CreateSavingsView(ctx context.Context, in SavingsViewInput) (*SavingsView, error) {
+	var out SavingsView
+	if err := c.Post(ctx, "/savings-views", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateSavingsView(ctx context.Context, id string, in SavingsViewInput) (*SavingsView, error) {
+	var out SavingsView
+	if err := c.Put(ctx, "/savings-views/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteSavingsView(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/savings-views/"+seg(id))
+}
+
+/* ------------------------------- cost reports ------------------------------ */
 
 func (c *Client) GetCostReport(ctx context.Context, id string) (*CostReport, error) {
 	var out CostReport
@@ -242,6 +278,66 @@ func (c *Client) DeleteCostReport(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/cost-reports/"+seg(id))
 }
 
+/* ----------------------- Kubernetes efficiency reports ---------------------- */
+
+func (c *Client) GetKubernetesEfficiencyReport(ctx context.Context, id string) (*KubernetesEfficiencyReport, error) {
+	var out KubernetesEfficiencyReport
+	if err := c.Get(ctx, "/k8s-efficiency-reports/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateKubernetesEfficiencyReport(ctx context.Context, in KubernetesEfficiencyReportInput) (*KubernetesEfficiencyReport, error) {
+	var out KubernetesEfficiencyReport
+	if err := c.Post(ctx, "/k8s-efficiency-reports", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateKubernetesEfficiencyReport(ctx context.Context, id string, in KubernetesEfficiencyReportInput) (*KubernetesEfficiencyReport, error) {
+	var out KubernetesEfficiencyReport
+	if err := c.Put(ctx, "/k8s-efficiency-reports/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteKubernetesEfficiencyReport(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/k8s-efficiency-reports/"+seg(id))
+}
+
+/* ----------------------------- resource reports ---------------------------- */
+
+func (c *Client) GetResourceReport(ctx context.Context, id string) (*ResourceReport, error) {
+	var out ResourceReport
+	if err := c.Get(ctx, "/resource-reports/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateResourceReport(ctx context.Context, in ResourceReportInput) (*ResourceReport, error) {
+	var out ResourceReport
+	if err := c.Post(ctx, "/resource-reports", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateResourceReport(ctx context.Context, id string, in ResourceReportInput) (*ResourceReport, error) {
+	var out ResourceReport
+	if err := c.Put(ctx, "/resource-reports/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteResourceReport(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/resource-reports/"+seg(id))
+}
+
 /* --------------------------- cost report folders --------------------------- */
 
 func (c *Client) ListCostReportFolders(ctx context.Context) ([]CostReportFolder, error) {
@@ -250,7 +346,7 @@ func (c *Client) ListCostReportFolders(ctx context.Context) ([]CostReportFolder,
 	return out, err
 }
 
-// GetCostReportFolder lists and filters — there is no single-GET route.
+// GetCostReportFolder lists and filters: there is no single-GET route.
 func (c *Client) GetCostReportFolder(ctx context.Context, id string) (*CostReportFolder, error) {
 	all, err := c.ListCostReportFolders(ctx)
 	if err != nil {
@@ -370,12 +466,6 @@ func (c *Client) DeleteScenarioModel(ctx context.Context, id string) error {
 
 /* ------------------------------- billing rules ----------------------------- */
 
-func (c *Client) ListBillingRules(ctx context.Context) ([]BillingRule, error) {
-	var out []BillingRule
-	err := c.Get(ctx, "/billing-rules", &out)
-	return out, err
-}
-
 func (c *Client) GetBillingRule(ctx context.Context, id string) (*BillingRule, error) {
 	var out BillingRule
 	if err := c.Get(ctx, "/billing-rules/"+seg(id), &out); err != nil {
@@ -404,13 +494,37 @@ func (c *Client) DeleteBillingRule(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/billing-rules/"+seg(id))
 }
 
-/* ------------------------------- cost exports ------------------------------ */
+/* ------------------------------- virtual tags ------------------------------ */
 
-func (c *Client) ListCostExports(ctx context.Context) ([]CostExport, error) {
-	var out []CostExport
-	err := c.Get(ctx, "/cost-exports", &out)
-	return out, err
+func (c *Client) GetVirtualTag(ctx context.Context, id string) (*VirtualTag, error) {
+	var out VirtualTag
+	if err := c.Get(ctx, "/virtual-tags/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
+
+func (c *Client) CreateVirtualTag(ctx context.Context, in VirtualTagInput) (*VirtualTag, error) {
+	var out VirtualTag
+	if err := c.Post(ctx, "/virtual-tags", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateVirtualTag(ctx context.Context, id string, in VirtualTagInput) (*VirtualTag, error) {
+	var out VirtualTag
+	if err := c.Put(ctx, "/virtual-tags/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteVirtualTag(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/virtual-tags/"+seg(id))
+}
+
+/* ------------------------------- cost exports ------------------------------ */
 
 func (c *Client) GetCostExport(ctx context.Context, id string) (*CostExport, error) {
 	var out CostExport
@@ -481,6 +595,38 @@ func (c *Client) DeleteBusinessMetric(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/business-metrics/"+seg(id))
 }
 
+// GetBusinessMetricImporter reads a metric's importer. The route answers
+// `{"importer": null}` for a metric whose values are only pushed; that is
+// synthesised into a 404 so a deletion outside Terraform reads as "needs
+// recreating" like every other object.
+func (c *Client) GetBusinessMetricImporter(ctx context.Context, metricID string) (*BusinessMetricImporter, error) {
+	path := "/business-metrics/" + seg(metricID) + "/importer"
+	var envelope struct {
+		Importer *BusinessMetricImporter `json:"importer"`
+	}
+	if err := c.Get(ctx, path, &envelope); err != nil {
+		return nil, err
+	}
+	if envelope.Importer == nil {
+		return nil, notFound(http.MethodGet, path, metricID)
+	}
+	return envelope.Importer, nil
+}
+
+// PutBusinessMetricImporter creates or replaces a metric's importer.
+func (c *Client) PutBusinessMetricImporter(ctx context.Context, metricID string, in BusinessMetricImporterInput) (*BusinessMetricImporter, error) {
+	var out BusinessMetricImporter
+	if err := c.Put(ctx, "/business-metrics/"+seg(metricID)+"/importer", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteBusinessMetricImporter stops importing. Imported values stay.
+func (c *Client) DeleteBusinessMetricImporter(ctx context.Context, metricID string) error {
+	return c.Delete(ctx, "/business-metrics/"+seg(metricID)+"/importer")
+}
+
 /* ----------------------------- cost annotations ---------------------------- */
 
 // ListCostAnnotations unwraps the {"annotations": […]} envelope.
@@ -494,7 +640,7 @@ func (c *Client) ListCostAnnotations(ctx context.Context) ([]CostAnnotation, err
 	return envelope.Annotations, nil
 }
 
-// GetCostAnnotation lists and filters — there is no single-GET route.
+// GetCostAnnotation lists and filters: there is no single-GET route.
 func (c *Client) GetCostAnnotation(ctx context.Context, id string) (*CostAnnotation, error) {
 	all, err := c.ListCostAnnotations(ctx)
 	if err != nil {
@@ -528,6 +674,58 @@ func (c *Client) DeleteCostAnnotation(ctx context.Context, id string) error {
 	return c.Delete(ctx, "/cost-annotations/"+seg(id))
 }
 
+/* ----------------------------- report forecasts ---------------------------- */
+//
+// Named forecasts hang off a report like its notifications do, so every
+// wrapper takes the report id too and the resource imports as
+// "reportId/forecastId".
+
+func (c *Client) ListCostForecasts(ctx context.Context, reportID string) ([]CostForecast, error) {
+	var envelope struct {
+		Forecasts []CostForecast `json:"forecasts"`
+	}
+	if err := c.Get(ctx, "/cost-reports/"+seg(reportID)+"/forecasts", &envelope); err != nil {
+		return nil, err
+	}
+	return envelope.Forecasts, nil
+}
+
+// GetCostForecast lists the report's forecasts and filters: there is no
+// single-GET route. A deleted report 404s on the listing, which reads the
+// same as a deleted forecast: it needs recreating.
+func (c *Client) GetCostForecast(ctx context.Context, reportID, id string) (*CostForecast, error) {
+	all, err := c.ListCostForecasts(ctx, reportID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/cost-reports/"+seg(reportID)+"/forecasts", id)
+}
+
+func (c *Client) CreateCostForecast(ctx context.Context, reportID string, in CostForecastInput) (*CostForecast, error) {
+	var out CostForecast
+	if err := c.Post(ctx, "/cost-reports/"+seg(reportID)+"/forecasts", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateCostForecast(ctx context.Context, reportID, id string, in CostForecastInput) (*CostForecast, error) {
+	var out CostForecast
+	if err := c.Put(ctx, "/cost-reports/"+seg(reportID)+"/forecasts/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteCostForecast(ctx context.Context, reportID, id string) error {
+	return c.Delete(ctx, "/cost-reports/"+seg(reportID)+"/forecasts/"+seg(id))
+}
+
 /* -------------------------- report notifications --------------------------- */
 //
 // These hang off a report rather than off the org, so every wrapper takes the
@@ -541,7 +739,7 @@ func (c *Client) ListReportNotifications(ctx context.Context, reportID string) (
 	return out, err
 }
 
-// GetReportNotification lists a report's schedules and filters — there is no
+// GetReportNotification lists a report's schedules and filters: there is no
 // single-GET route for one schedule.
 func (c *Client) GetReportNotification(ctx context.Context, reportID, id string) (*ReportNotification, error) {
 	all, err := c.ListReportNotifications(ctx, reportID)
@@ -576,6 +774,132 @@ func (c *Client) DeleteReportNotification(ctx context.Context, reportID, id stri
 	return c.Delete(ctx, "/cost-reports/"+seg(reportID)+"/notifications/"+seg(id))
 }
 
+/* ------------------------- dashboard notifications ------------------------- */
+//
+// The same shape as report notifications, nested under a dashboard instead of
+// a report, so the Terraform resource imports as "dashboardId/notificationId".
+
+func (c *Client) ListDashboardNotifications(ctx context.Context, dashboardID string) ([]DashboardNotification, error) {
+	var out []DashboardNotification
+	err := c.Get(ctx, "/dashboards/"+seg(dashboardID)+"/notifications", &out)
+	return out, err
+}
+
+// GetDashboardNotification lists a dashboard's schedules and filters: there is
+// no single-GET route for one schedule.
+func (c *Client) GetDashboardNotification(ctx context.Context, dashboardID, id string) (*DashboardNotification, error) {
+	all, err := c.ListDashboardNotifications(ctx, dashboardID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/dashboards/"+seg(dashboardID)+"/notifications", id)
+}
+
+func (c *Client) CreateDashboardNotification(ctx context.Context, dashboardID string, in DashboardNotificationInput) (*DashboardNotification, error) {
+	var out DashboardNotification
+	if err := c.Post(ctx, "/dashboards/"+seg(dashboardID)+"/notifications", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateDashboardNotification(ctx context.Context, dashboardID, id string, in DashboardNotificationInput) (*DashboardNotification, error) {
+	var out DashboardNotification
+	if err := c.Put(ctx, "/dashboards/"+seg(dashboardID)+"/notifications/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteDashboardNotification(ctx context.Context, dashboardID, id string) error {
+	return c.Delete(ctx, "/dashboards/"+seg(dashboardID)+"/notifications/"+seg(id))
+}
+
+/* ------------------------------- cost canvases ------------------------------ */
+//
+// DELETE is a soft delete; the single GET then 404s like any missing row, so
+// the resource needs no special handling for it.
+
+func (c *Client) GetCostCanvas(ctx context.Context, id string) (*CostCanvas, error) {
+	var out CostCanvas
+	if err := c.Get(ctx, "/cost-canvases/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateCostCanvas(ctx context.Context, in CostCanvasInput) (*CostCanvas, error) {
+	var out CostCanvas
+	if err := c.Post(ctx, "/cost-canvases", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateCostCanvas(ctx context.Context, id string, in CostCanvasInput) (*CostCanvas, error) {
+	var out CostCanvas
+	if err := c.Put(ctx, "/cost-canvases/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteCostCanvas(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/cost-canvases/"+seg(id))
+}
+
+/* ------------------------ cost canvas notifications ------------------------ */
+//
+// The dashboard notification shape again, nested under a canvas, so the
+// Terraform resource imports as "costCanvasId/notificationId". The write body is
+// DashboardNotificationInput verbatim.
+
+func (c *Client) ListCostCanvasNotifications(ctx context.Context, canvasID string) ([]CostCanvasNotification, error) {
+	var out []CostCanvasNotification
+	err := c.Get(ctx, "/cost-canvases/"+seg(canvasID)+"/notifications", &out)
+	return out, err
+}
+
+// GetCostCanvasNotification lists a canvas's schedules and filters: there is
+// no single-GET route for one schedule.
+func (c *Client) GetCostCanvasNotification(ctx context.Context, canvasID, id string) (*CostCanvasNotification, error) {
+	all, err := c.ListCostCanvasNotifications(ctx, canvasID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].ID == id {
+			return &all[i], nil
+		}
+	}
+	return nil, notFound(http.MethodGet, "/cost-canvases/"+seg(canvasID)+"/notifications", id)
+}
+
+func (c *Client) CreateCostCanvasNotification(ctx context.Context, canvasID string, in DashboardNotificationInput) (*CostCanvasNotification, error) {
+	var out CostCanvasNotification
+	if err := c.Post(ctx, "/cost-canvases/"+seg(canvasID)+"/notifications", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateCostCanvasNotification(ctx context.Context, canvasID, id string, in DashboardNotificationInput) (*CostCanvasNotification, error) {
+	var out CostCanvasNotification
+	if err := c.Put(ctx, "/cost-canvases/"+seg(canvasID)+"/notifications/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteCostCanvasNotification(ctx context.Context, canvasID, id string) error {
+	return c.Delete(ctx, "/cost-canvases/"+seg(canvasID)+"/notifications/"+seg(id))
+}
+
 /* ------------------------------ cost settings ------------------------------ */
 
 func (c *Client) GetAnomalySettings(ctx context.Context) (*CostAnomalySettings, error) {
@@ -595,6 +919,39 @@ func (c *Client) PutAnomalySettings(ctx context.Context, in CostAnomalySettings)
 		return nil, err
 	}
 	return &out, nil
+}
+
+/* --------------------------- anomaly suppressions -------------------------- */
+
+// GetAnomalySuppression reads by the single-GET route, which 404s once the
+// suppression is deleted. An expired suppression is still returned (with
+// active false); expiry is not deletion.
+func (c *Client) GetAnomalySuppression(ctx context.Context, id string) (*CostAnomalySuppression, error) {
+	var out CostAnomalySuppression
+	if err := c.Get(ctx, "/costs/anomaly-suppressions/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateAnomalySuppression(ctx context.Context, in CostAnomalySuppressionInput) (*CostAnomalySuppression, error) {
+	var out CostAnomalySuppression
+	if err := c.Post(ctx, "/costs/anomaly-suppressions", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateAnomalySuppression(ctx context.Context, id string, in CostAnomalySuppressionInput) (*CostAnomalySuppression, error) {
+	var out CostAnomalySuppression
+	if err := c.Put(ctx, "/costs/anomaly-suppressions/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteAnomalySuppression(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/costs/anomaly-suppressions/"+seg(id))
 }
 
 func (c *Client) GetEfficiencySettings(ctx context.Context) (*CostEfficiencySettings, error) {
@@ -642,7 +999,7 @@ func (c *Client) UpsertExchangeRate(ctx context.Context, in ExchangeRateInput) (
 	return &out, nil
 }
 
-// GetExchangeRate reads the whole rate table and filters — rates are only ever
+// GetExchangeRate reads the whole rate table and filters: rates are only ever
 // returned as part of the currency config.
 func (c *Client) GetExchangeRate(ctx context.Context, id string) (*ExchangeRate, error) {
 	config, err := c.GetCurrencyConfig(ctx)
@@ -673,4 +1030,91 @@ func (c *Client) ListPlugins(ctx context.Context) ([]PluginSummary, error) {
 	var out []PluginSummary
 	err := c.Get(ctx, "/accounts/plugins", &out)
 	return out, err
+}
+
+/* --------------------------- custom cost sources -------------------------- */
+
+func (c *Client) GetCustomCostSource(ctx context.Context, id string) (*CustomCostSource, error) {
+	var out CustomCostSource
+	if err := c.Get(ctx, "/custom-cost-sources/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateCustomCostSource(ctx context.Context, in CustomCostSourceInput) (*CustomCostSource, error) {
+	var out CustomCostSource
+	if err := c.Post(ctx, "/custom-cost-sources", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateCustomCostSource(ctx context.Context, id string, in CustomCostSourceInput) (*CustomCostSource, error) {
+	var out CustomCostSource
+	if err := c.Put(ctx, "/custom-cost-sources/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteCustomCostSource deletes the source and zeroes every cost row it holds.
+func (c *Client) DeleteCustomCostSource(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/custom-cost-sources/"+seg(id))
+}
+
+/* --------------------------- network flow reports -------------------------- */
+
+func (c *Client) GetNetworkFlowReport(ctx context.Context, id string) (*NetworkFlowReport, error) {
+	var out NetworkFlowReport
+	if err := c.Get(ctx, "/network-flows/reports/"+seg(id), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateNetworkFlowReport(ctx context.Context, in NetworkFlowReportInput) (*NetworkFlowReport, error) {
+	var out NetworkFlowReport
+	if err := c.Post(ctx, "/network-flows/reports", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UpdateNetworkFlowReport(ctx context.Context, id string, in NetworkFlowReportInput) (*NetworkFlowReport, error) {
+	var out NetworkFlowReport
+	if err := c.Put(ctx, "/network-flows/reports/"+seg(id), in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteNetworkFlowReport(ctx context.Context, id string) error {
+	return c.Delete(ctx, "/network-flows/reports/"+seg(id))
+}
+
+/* ------------------------ report anomaly alerts ---------------------------- */
+//
+// One per report, addressed by the report's id. GET answers 404 when the
+// report has no alert (or the report is gone), which is what Read needs to
+// drop it from state.
+
+func (c *Client) GetCostReportAnomalyAlert(ctx context.Context, reportID string) (*CostReportAnomalyAlert, error) {
+	var out CostReportAnomalyAlert
+	if err := c.Get(ctx, "/cost-reports/"+seg(reportID)+"/anomaly-alert", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) PutCostReportAnomalyAlert(ctx context.Context, reportID string, in CostReportAnomalyAlertInput) (*CostReportAnomalyAlert, error) {
+	var out CostReportAnomalyAlert
+	if err := c.Put(ctx, "/cost-reports/"+seg(reportID)+"/anomaly-alert", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) DeleteCostReportAnomalyAlert(ctx context.Context, reportID string) error {
+	return c.Delete(ctx, "/cost-reports/"+seg(reportID)+"/anomaly-alert")
 }

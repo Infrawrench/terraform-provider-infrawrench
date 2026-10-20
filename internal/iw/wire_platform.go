@@ -8,7 +8,7 @@ import (
 // Wire shapes for the configuration surfaces outside cost management:
 // monitoring, lifecycle governance, access control and alert delivery.
 //
-// The two conventions from wire.go hold here unchanged — an omitempty pointer
+// The two conventions from wire.go hold here unchanged: an omitempty pointer
 // means "omitted clears it", a pointer without omitempty marshals nil as an
 // explicit null because the server distinguishes the two. What is new in this
 // file is a third shape the cost surface never had: several of these routes are
@@ -75,6 +75,79 @@ type SyntheticProbe struct {
 	Uptime24h           *float64 `json:"uptime24h"`
 	CreatedAt           string   `json:"createdAt"`
 	UpdatedAt           string   `json:"updatedAt"`
+}
+
+/* ---------------------------------- SLOs ---------------------------------- */
+
+// SloInput is the POST and PUT body. One struct serves both because the two
+// routes accept the same keys and the PUT leaves an omitted key alone; the
+// provider always sends the full set.
+//
+// Description and the source fields marshal nil as an explicit null (no
+// omitempty), which the server reads as "clear it": switching an SLO from a
+// probe to a metric must not leave the old probe id behind.
+type SloInput struct {
+	Name               string   `json:"name"`
+	Description        *string  `json:"description"`
+	SliKind            string   `json:"sliKind"`
+	ProbeID            *string  `json:"probeId"`
+	LatencyThresholdMs *int64   `json:"latencyThresholdMs"`
+	ResourceID         *string  `json:"resourceId"`
+	MetricKey          *string  `json:"metricKey"`
+	Comparator         *string  `json:"comparator"`
+	Threshold          *float64 `json:"threshold"`
+	TargetPercent      float64  `json:"targetPercent"`
+	WindowDays         int64    `json:"windowDays"`
+	AlertsEnabled      bool     `json:"alertsEnabled"`
+	SuggestFreeze      bool     `json:"suggestFreeze"`
+	Enabled            bool     `json:"enabled"`
+}
+
+// Slo is a service-level objective. Everything from Status down is the last
+// evaluation's snapshot rather than configuration.
+type Slo struct {
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Description        *string  `json:"description"`
+	SliKind            string   `json:"sliKind"`
+	ProbeID            *string  `json:"probeId"`
+	ProbeName          *string  `json:"probeName"`
+	LatencyThresholdMs *int64   `json:"latencyThresholdMs"`
+	ResourceID         *string  `json:"resourceId"`
+	ResourceName       *string  `json:"resourceName"`
+	AccountID          *string  `json:"accountId"`
+	PluginID           *string  `json:"pluginId"`
+	ResourceTypeID     *string  `json:"resourceTypeId"`
+	MetricKey          *string  `json:"metricKey"`
+	Comparator         *string  `json:"comparator"`
+	Threshold          *float64 `json:"threshold"`
+	TargetPercent      float64  `json:"targetPercent"`
+	WindowDays         int64    `json:"windowDays"`
+	AlertsEnabled      bool     `json:"alertsEnabled"`
+	SuggestFreeze      bool     `json:"suggestFreeze"`
+	Enabled            bool     `json:"enabled"`
+
+	Status                 string              `json:"status"`
+	Sli                    *float64            `json:"sli"`
+	GoodEvents             float64             `json:"goodEvents"`
+	TotalEvents            float64             `json:"totalEvents"`
+	BudgetRemaining        *float64            `json:"budgetRemaining"`
+	BudgetTotalMinutes     float64             `json:"budgetTotalMinutes"`
+	BudgetRemainingMinutes *float64            `json:"budgetRemainingMinutes"`
+	BurnRates              map[string]*float64 `json:"burnRates"`
+	BurnAlert              string              `json:"burnAlert"`
+	ExhaustedAt            *string             `json:"exhaustedAt"`
+	LastEvalAt             *string             `json:"lastEvalAt"`
+	LastError              *string             `json:"lastError"`
+	CreatedAt              string              `json:"createdAt"`
+	UpdatedAt              string              `json:"updatedAt"`
+}
+
+// SloDetail is the single-GET envelope: the SLO plus its hourly history and
+// the freeze in effect. The provider only reads `slo`; the rest is display
+// data with nothing to manage.
+type SloDetail struct {
+	Slo Slo `json:"slo"`
 }
 
 /* ------------------------------ metric alerts ------------------------------ */
@@ -146,9 +219,9 @@ type StatusPageComponent struct {
 	ProbeEnabled bool    `json:"probeEnabled"`
 }
 
-// StatusPageInput is both the POST body and the PUT body. The PUT is a patch —
-// an absent key is left alone, and an absent components list leaves the whole
-// set alone — so the provider always sends every field.
+// StatusPageInput is both the POST body and the PUT body. The PUT is a patch
+// (an absent key is left alone, and an absent components list leaves the whole
+// set alone) so the provider always sends every field.
 type StatusPageInput struct {
 	Title       string                     `json:"title"`
 	Description *string                    `json:"description"`
@@ -162,7 +235,7 @@ type StatusPageInput struct {
 // StatusPage is a public uptime page.
 //
 // Slug is server-minted with real entropy rather than derived from the title,
-// and it is the page's only access credential — anyone holding the URL can read
+// and it is the page's only access credential: anyone holding the URL can read
 // it. Rotating it is an explicit action on the API, deliberately not something
 // a Terraform plan can do by accident.
 type StatusPage struct {
@@ -182,7 +255,7 @@ type StatusPage struct {
 /* ----------------------------- sleep schedules ----------------------------- */
 
 // SleepScheduleCreate is the POST body. The resource and account are fixed at
-// creation — the update route does not carry them — so changing either one
+// creation (the update route does not carry them) so changing either one
 // replaces the schedule.
 type SleepScheduleCreate struct {
 	ResourceID string  `json:"resourceId"`
@@ -237,7 +310,7 @@ type SleepSchedule struct {
 //
 // StartsAt is an omitempty pointer with an asymmetric server rule worth knowing:
 // on create an absent start means "now", and on *update* an absent start leaves
-// the stored one alone — while an absent Reason or EndsAt clears them. That is
+// the stored one alone, while an absent Reason or EndsAt clears them. That is
 // why the Terraform attribute is Optional and Computed rather than merely
 // Optional.
 type ChangeFreezeInput struct {
@@ -347,6 +420,24 @@ type Role struct {
 	IsSystem    bool     `json:"isSystem"`
 	SystemKey   *string  `json:"systemKey"`
 	Permissions []string `json:"permissions"`
+}
+
+/* ------------------------- role default dashboards ------------------------- */
+
+// RoleDefaultDashboard is the dashboard members holding a role land on when
+// they have not picked their own. DashboardID is null when the role has none
+// and its members fall through to the organization default.
+type RoleDefaultDashboard struct {
+	RoleID      string  `json:"roleId"`
+	RoleName    string  `json:"roleName"`
+	IsSystem    bool    `json:"isSystem"`
+	SystemKey   *string `json:"systemKey"`
+	DashboardID *string `json:"dashboardId"`
+}
+
+// SetDefaultDashboardRequest is the PUT body for a role's default.
+type SetDefaultDashboardRequest struct {
+	DashboardID string `json:"dashboardId"`
 }
 
 /* --------------------------------- ssh keys -------------------------------- */
@@ -514,36 +605,151 @@ type AccountCredentialsInput struct {
 
 // ManagedAccountInput is the POST/PUT body for a customer an MSP bills.
 type ManagedAccountInput struct {
-	Name              string   `json:"name"`
-	ContactName       *string  `json:"contactName"`
-	ContactEmail      *string  `json:"contactEmail"`
-	BillingAddress    *string  `json:"billingAddress"`
-	BillingCurrency   string   `json:"billingCurrency"`
-	CostBasis         *string  `json:"costBasis,omitempty"`
-	ApplyBillingRules *bool    `json:"applyBillingRules,omitempty"`
-	Notes             *string  `json:"notes"`
-	CostCentreIDs     []string `json:"costCentreIds"`
-	AccountIDs        []string `json:"accountIds"`
+	Name              string  `json:"name"`
+	ContactName       *string `json:"contactName"`
+	ContactEmail      *string `json:"contactEmail"`
+	BillingAddress    *string `json:"billingAddress"`
+	BillingCurrency   string  `json:"billingCurrency"`
+	CostBasis         *string `json:"costBasis,omitempty"`
+	ApplyBillingRules *bool   `json:"applyBillingRules,omitempty"`
+	// Pricing is always sent by the provider; the API keeps the saved
+	// settings when it is absent, which only matters to other clients.
+	Pricing *ManagedAccountPricing `json:"pricing,omitempty"`
+	Notes   *string                `json:"notes"`
+	// BillingProfileID is always sent, null included: the API leaves the saved
+	// profile alone only when the key is absent, and a provider that omitted it
+	// could never clear one.
+	BillingProfileID *string  `json:"billingProfileId"`
+	CostCentreIDs    []string `json:"costCentreIds"`
+	AccountIDs       []string `json:"accountIds"`
+}
+
+// ManagedAccountPricing is how a customer's invoice is priced beyond the
+// billing rules: re-rating to public list prices and what happens to provider
+// discounts, credits and commitment benefits.
+type ManagedAccountPricing struct {
+	Rerate             ManagedAccountRerate `json:"rerate"`
+	Discounts          DiscountTreatment    `json:"discounts"`
+	Credits            DiscountTreatment    `json:"credits"`
+	CommitmentBenefits DiscountTreatment    `json:"commitmentBenefits"`
+}
+
+// ManagedAccountRerate presents usage at the provider's public on-demand price.
+type ManagedAccountRerate struct {
+	Enabled               bool                `json:"enabled"`
+	Scope                 []PricingScopeEntry `json:"scope"`
+	FallbackUpliftPercent float64             `json:"fallbackUpliftPercent"`
+	Uplifts               []PricingUplift     `json:"uplifts"`
+}
+
+// PricingScopeEntry names a provider and optionally one of its services.
+type PricingScopeEntry struct {
+	PluginID string  `json:"pluginId"`
+	Service  *string `json:"service,omitempty"`
+}
+
+// PricingUplift is a per-provider or per-service fallback uplift.
+type PricingUplift struct {
+	PluginID string  `json:"pluginId"`
+	Service  *string `json:"service,omitempty"`
+	Percent  float64 `json:"percent"`
+}
+
+// DiscountTreatment says whether a benefit reaches the customer.
+type DiscountTreatment struct {
+	Mode               string   `json:"mode"`
+	PassThroughPercent *float64 `json:"passThroughPercent,omitempty"`
 }
 
 // ManagedAccount is a billed customer. A cost centre or cloud account belongs
 // to at most one of them; claiming one twice is a 409 naming the other customer.
 type ManagedAccount struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	ContactName       *string  `json:"contactName"`
-	ContactEmail      *string  `json:"contactEmail"`
-	BillingAddress    *string  `json:"billingAddress"`
-	BillingCurrency   string   `json:"billingCurrency"`
-	CostBasis         string   `json:"costBasis"`
-	ApplyBillingRules bool     `json:"applyBillingRules"`
-	Notes             *string  `json:"notes"`
-	CostCentreIDs     []string `json:"costCentreIds"`
-	AccountIDs        []string `json:"accountIds"`
-	InvoiceCount      int64    `json:"invoiceCount"`
-	CreatedByUserID   *string  `json:"createdByUserId"`
-	CreatedAt         string   `json:"createdAt"`
-	UpdatedAt         string   `json:"updatedAt"`
+	ID                string                `json:"id"`
+	Name              string                `json:"name"`
+	ContactName       *string               `json:"contactName"`
+	ContactEmail      *string               `json:"contactEmail"`
+	BillingAddress    *string               `json:"billingAddress"`
+	BillingCurrency   string                `json:"billingCurrency"`
+	CostBasis         string                `json:"costBasis"`
+	ApplyBillingRules bool                  `json:"applyBillingRules"`
+	Pricing           ManagedAccountPricing `json:"pricing"`
+	Notes             *string               `json:"notes"`
+	BillingProfileID  *string               `json:"billingProfileId"`
+	CostCentreIDs     []string              `json:"costCentreIds"`
+	AccountIDs        []string              `json:"accountIds"`
+	InvoiceCount      int64                 `json:"invoiceCount"`
+	CreatedByUserID   *string               `json:"createdByUserId"`
+	CreatedAt         string                `json:"createdAt"`
+	UpdatedAt         string                `json:"updatedAt"`
+}
+
+/* ----------------------------- billing profiles ---------------------------- */
+
+// BillingProfileTaxRate is a tax charged on an invoice's subtotal as its own line.
+type BillingProfileTaxRate struct {
+	Name string  `json:"name"`
+	Rate float64 `json:"rate"`
+}
+
+// BillingProfileBank is where a customer pays. Every field may be null; the
+// API drops an all-null block to null.
+type BillingProfileBank struct {
+	AccountName   *string `json:"accountName"`
+	BankName      *string `json:"bankName"`
+	IBAN          *string `json:"iban"`
+	BIC           *string `json:"bic"`
+	AccountNumber *string `json:"accountNumber"`
+	RoutingNumber *string `json:"routingNumber"`
+	Instructions  *string `json:"instructions"`
+}
+
+// BillingProfileInput is the POST/PUT body. Logo is a PNG or JPEG data URL;
+// it is always sent, null included, so removing it from configuration removes
+// it from the profile.
+type BillingProfileInput struct {
+	Name               string                  `json:"name"`
+	LegalName          *string                 `json:"legalName"`
+	Address            *string                 `json:"address"`
+	TaxID              *string                 `json:"taxId"`
+	PONumber           *string                 `json:"poNumber"`
+	ToEmails           []string                `json:"toEmails"`
+	CcEmails           []string                `json:"ccEmails"`
+	Currency           *string                 `json:"currency"`
+	PaymentTermsDays   *int64                  `json:"paymentTermsDays"`
+	NumberPrefix       string                  `json:"numberPrefix"`
+	NumberIncludesYear bool                    `json:"numberIncludesYear"`
+	NumberStart        int64                   `json:"numberStart"`
+	TaxRates           []BillingProfileTaxRate `json:"taxRates"`
+	Bank               *BillingProfileBank     `json:"bank"`
+	Footer             *string                 `json:"footer"`
+	Logo               *string                 `json:"logo"`
+}
+
+// BillingProfile is reusable invoice settings shared by the customers
+// assigned to it: addressee, recipients, currency, terms, tax, numbering and
+// remittance details. Approved invoices carry their own frozen copy.
+type BillingProfile struct {
+	ID                 string                  `json:"id"`
+	Name               string                  `json:"name"`
+	LegalName          *string                 `json:"legalName"`
+	Address            *string                 `json:"address"`
+	TaxID              *string                 `json:"taxId"`
+	PONumber           *string                 `json:"poNumber"`
+	ToEmails           []string                `json:"toEmails"`
+	CcEmails           []string                `json:"ccEmails"`
+	Currency           *string                 `json:"currency"`
+	PaymentTermsDays   *int64                  `json:"paymentTermsDays"`
+	NumberPrefix       string                  `json:"numberPrefix"`
+	NumberIncludesYear bool                    `json:"numberIncludesYear"`
+	NumberStart        int64                   `json:"numberStart"`
+	TaxRates           []BillingProfileTaxRate `json:"taxRates"`
+	Bank               *BillingProfileBank     `json:"bank"`
+	Footer             *string                 `json:"footer"`
+	Logo               *string                 `json:"logo"`
+	ManagedAccountIDs  []string                `json:"managedAccountIds"`
+	CreatedByUserID    *string                 `json:"createdByUserId"`
+	CreatedAt          string                  `json:"createdAt"`
+	UpdatedAt          string                  `json:"updatedAt"`
 }
 
 /* ----------------------------- deploy triggers ----------------------------- */
@@ -558,7 +764,7 @@ type DeployTriggerInput struct {
 }
 
 // DeployTrigger redeploys a repo when its branch moves. The only mutable field
-// is Enabled — repo, branch and env are fixed at creation.
+// is Enabled: repo, branch and env are fixed at creation.
 type DeployTrigger struct {
 	ID        string  `json:"id"`
 	Repo      string  `json:"repo"`
@@ -569,7 +775,7 @@ type DeployTrigger struct {
 	LastRunAt *string `json:"lastRunAt"`
 }
 
-// DeployTriggerEnabled is the PATCH body — the whole mutable surface.
+// DeployTriggerEnabled is the PATCH body: the whole mutable surface.
 type DeployTriggerEnabled struct {
 	Enabled bool `json:"enabled"`
 }
@@ -584,7 +790,7 @@ type SlackChannelCreate struct {
 	IsPrivate      *bool  `json:"isPrivate,omitempty"`
 }
 
-// SlackChannelUpdate is the PATCH body — the display name is the only thing an
+// SlackChannelUpdate is the PATCH body: the display name is the only thing an
 // edit can change; rebinding to another channel replaces the row.
 type SlackChannelUpdate struct {
 	ChannelName string `json:"channelName"`
@@ -600,7 +806,7 @@ type SlackChannel struct {
 }
 
 // SlackInstallation is one connected Slack workspace. Installations are created
-// by the OAuth flow, never by this provider — a channel references one by id.
+// by the OAuth flow, never by this provider: a channel references one by id.
 type SlackInstallation struct {
 	ID       string  `json:"id"`
 	TeamID   string  `json:"teamId"`
@@ -679,13 +885,31 @@ type DigestRecipient struct {
 
 /* ------------------------------ alert routing ------------------------------ */
 
-// AlertDestination is a tagged union over the three delivery targets. It
+// AlertDestination is a tagged union over the nine delivery targets. It
 // marshals to exactly the branch its Kind names, because the server's schema is
 // a strict oneOf and a push destination carrying a stray channelId is rejected.
 type AlertDestination struct {
 	Kind      string  `json:"kind"`
 	ChannelID *string `json:"channelId,omitempty"`
 	WebhookID *string `json:"webhookId,omitempty"`
+	// ScheduleID names an on-call rotation rather than a person: who it reaches
+	// is decided when the alert fires, not when the rule is written.
+	ScheduleID *string `json:"scheduleId,omitempty"`
+	// UserID names an organization member for `email-member`. The member's
+	// current login address is read at send time, not stored on the rule.
+	UserID *string `json:"userId,omitempty"`
+	// Address is a literal mailbox for `email-address`. It must pass the
+	// organization's external-address policy when saved and again when sent.
+	Address *string `json:"address,omitempty"`
+	// AccountID names a connected paging provider account (PagerDuty,
+	// incident.io) for `paging-provider` and `provider-on-call`.
+	AccountID *string `json:"accountId,omitempty"`
+	// TargetID is the provider's id for a `paging-provider` target: a
+	// PagerDuty service or an incident.io alert source.
+	TargetID *string `json:"targetId,omitempty"`
+	// SourceID is the provider's schedule or escalation policy id for
+	// `provider-on-call`; who it reaches is decided when the alert fires.
+	SourceID *string `json:"sourceId,omitempty"`
 }
 
 // MarshalJSON emits only the keys belonging to the named branch.
@@ -713,8 +937,53 @@ func (d AlertDestination) MarshalJSON() ([]byte, error) {
 			Kind      string `json:"kind"`
 			WebhookID string `json:"webhookId"`
 		}{Kind: "msteams", WebhookID: id})
+	case "on-call":
+		id := ""
+		if d.ScheduleID != nil {
+			id = *d.ScheduleID
+		}
+		return json.Marshal(struct {
+			Kind       string `json:"kind"`
+			ScheduleID string `json:"scheduleId"`
+		}{Kind: "on-call", ScheduleID: id})
+	case "github-issues":
+		// Carries no id: the repository comes from the organization's GitHub
+		// issue settings (routes, then the default repository), not the rule.
+		return json.Marshal(struct {
+			Kind string `json:"kind"`
+		}{Kind: "github-issues"})
+	case "email-member":
+		id := ""
+		if d.UserID != nil {
+			id = *d.UserID
+		}
+		return json.Marshal(struct {
+			Kind   string `json:"kind"`
+			UserID string `json:"userId"`
+		}{Kind: "email-member", UserID: id})
+	case "email-address":
+		address := ""
+		if d.Address != nil {
+			address = *d.Address
+		}
+		return json.Marshal(struct {
+			Kind    string `json:"kind"`
+			Address string `json:"address"`
+		}{Kind: "email-address", Address: address})
+	case "paging-provider":
+		return json.Marshal(struct {
+			Kind      string `json:"kind"`
+			AccountID string `json:"accountId"`
+			TargetID  string `json:"targetId"`
+		}{Kind: "paging-provider", AccountID: deref(d.AccountID), TargetID: deref(d.TargetID)})
+	case "provider-on-call":
+		return json.Marshal(struct {
+			Kind      string `json:"kind"`
+			AccountID string `json:"accountId"`
+			SourceID  string `json:"sourceId"`
+		}{Kind: "provider-on-call", AccountID: deref(d.AccountID), SourceID: deref(d.SourceID)})
 	default:
-		return nil, fmt.Errorf("unknown alert destination kind %q (want \"push\", \"slack\" or \"msteams\")", d.Kind)
+		return nil, fmt.Errorf("unknown alert destination kind %q (want \"push\", \"slack\", \"msteams\", \"on-call\", \"github-issues\", \"email-member\", \"email-address\", \"paging-provider\" or \"provider-on-call\")", d.Kind)
 	}
 }
 
@@ -794,7 +1063,7 @@ type QuietHours struct {
 
 // EscalationPolicy notifies a second set of destinations when nobody
 // acknowledges in time. Acknowledgement comes from the button on the Slack
-// message, so a rule routed only to Teams or push always escalates.
+// message, so a rule routed only to Teams, push or email always escalates.
 type EscalationPolicy struct {
 	AfterMinutes int64              `json:"afterMinutes"`
 	Destinations []AlertDestination `json:"destinations"`
@@ -816,7 +1085,7 @@ type AlertRuleInput struct {
 }
 
 // AlertRule is a stored routing rule. Position is the evaluation order, which
-// the list's own order defines — the server assigns it, so it is read-only.
+// the list's own order defines: the server assigns it, so it is read-only.
 type AlertRule struct {
 	ID              string             `json:"id"`
 	Name            string             `json:"name"`
@@ -840,11 +1109,75 @@ type AlertRulesResponse struct {
 	UsingDefaults bool        `json:"usingDefaults"`
 
 	// Reference data the editor uses. Decoded so the drift check can see the
-	// route is fully covered, but not surfaced as Terraform attributes — the
+	// route is fully covered, but not surfaced as Terraform attributes: the
 	// dedicated data sources exist for that.
 	SlackChannels   []json.RawMessage `json:"slackChannels,omitempty"`
 	MSTeamsWebhooks []json.RawMessage `json:"msTeamsWebhooks,omitempty"`
 	Accounts        []json.RawMessage `json:"accounts,omitempty"`
+	OnCallSchedules []json.RawMessage `json:"onCallSchedules,omitempty"`
+	// Email picker data. `infrawrench_members` and
+	// `infrawrench_alert_email_settings` surface the same facts from their own
+	// routes, so these stay raw here too.
+	Members        []json.RawMessage `json:"members,omitempty"`
+	EmailAvailable *bool             `json:"emailAvailable,omitempty"`
+	EmailSettings  json.RawMessage   `json:"emailSettings,omitempty"`
+	MemberDomains  []string          `json:"memberDomains,omitempty"`
+}
+
+/* ------------------------------- alert email ------------------------------- */
+
+// AlertEmailRecipients is who a budget, cost change alert, anomaly setting or
+// efficiency setting emails directly, on top of the routing rules.
+//
+// On a write the whole object is optional and its absence means "leave the
+// stored list alone"; empty arrays clear it. That is why every input struct
+// carries it as a pointer with omitempty, and why both arrays are always sent
+// together once it is present: the schema requires both keys.
+type AlertEmailRecipients struct {
+	UserIDs   []string `json:"userIds"`
+	Addresses []string `json:"addresses"`
+}
+
+// AlertEmailMember is one organization member as the recipient picker sees
+// them. Name is nullable: a member who never set one has only an address.
+type AlertEmailMember struct {
+	UserID string  `json:"userId"`
+	Name   *string `json:"name"`
+	Email  string  `json:"email"`
+}
+
+// AlertEmailSettings is the external-address policy, and the PUT body for it.
+// The PUT is a whole-object replace, so neither field is omitempty.
+type AlertEmailSettings struct {
+	ExternalPolicy string   `json:"externalPolicy"`
+	AllowedDomains []string `json:"allowedDomains"`
+}
+
+// AlertEmailSuppression is an address that used an alert email's unsubscribe
+// link. Recipients control these, not the organization's configuration.
+type AlertEmailSuppression struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	CreatedAt string `json:"createdAt"`
+}
+
+// AlertEmailSettingsView is what GET and PUT /alert-email/settings return.
+type AlertEmailSettingsView struct {
+	ExternalPolicy string                  `json:"externalPolicy"`
+	AllowedDomains []string                `json:"allowedDomains"`
+	EmailAvailable bool                    `json:"emailAvailable"`
+	MemberDomains  []string                `json:"memberDomains"`
+	Suppressions   []AlertEmailSuppression `json:"suppressions"`
+}
+
+// AlertEmailOptions is what GET /alert-email returns: the recipient picker.
+// It needs only costs:read, which is why the members data source reads it
+// rather than the settings route.
+type AlertEmailOptions struct {
+	EmailAvailable bool               `json:"emailAvailable"`
+	Members        []AlertEmailMember `json:"members"`
+	Settings       AlertEmailSettings `json:"settings"`
+	MemberDomains  []string           `json:"memberDomains"`
 }
 
 /* ------------------------- resource alert settings ------------------------- */
@@ -870,6 +1203,30 @@ type DriftAlertSettings struct {
 	LastNotifiedAt  *string  `json:"lastNotifiedAt"`
 }
 
+// DoraSettingsUpdate is the PUT body for the DORA metrics settings. The
+// pipeline list is a pointer so `[]` (count no pipelines) is sent rather than
+// omitted.
+type DoraSettingsUpdate struct {
+	FailureWindowHours     *int64    `json:"failureWindowHours,omitempty"`
+	ProductionEnvironments []string  `json:"productionEnvironments,omitempty"`
+	PipelinePatterns       *[]string `json:"pipelinePatterns,omitempty"`
+	CountFailedDeploys     *bool     `json:"countFailedDeploys,omitempty"`
+	IncludeResourceChanges *bool     `json:"includeResourceChanges,omitempty"`
+	DigestEnabled          *bool     `json:"digestEnabled,omitempty"`
+}
+
+// DoraSettings is the org singleton deciding what DORA metrics count as
+// production and as a failed change. UpdatedAt is null until first saved.
+type DoraSettings struct {
+	FailureWindowHours     int64    `json:"failureWindowHours"`
+	ProductionEnvironments []string `json:"productionEnvironments"`
+	PipelinePatterns       []string `json:"pipelinePatterns"`
+	CountFailedDeploys     bool     `json:"countFailedDeploys"`
+	IncludeResourceChanges bool     `json:"includeResourceChanges"`
+	DigestEnabled          bool     `json:"digestEnabled"`
+	UpdatedAt              *string  `json:"updatedAt"`
+}
+
 // ExpiryAlertSettingsUpdate is the PUT body for the expiry radar.
 type ExpiryAlertSettingsUpdate struct {
 	Enabled  *bool  `json:"enabled,omitempty"`
@@ -885,6 +1242,44 @@ type ExpiryAlertSettings struct {
 	LastNotifiedAt *string `json:"lastNotifiedAt"`
 }
 
+// ExtendedSupportSettingsUpdate is the PUT body for extended-support findings.
+type ExtendedSupportSettingsUpdate struct {
+	Enabled  *bool  `json:"enabled,omitempty"`
+	LeadDays *int64 `json:"leadDays,omitempty"`
+}
+
+// ExtendedSupportSettings is the org singleton for the weekly extended-support
+// alert and how far ahead upcoming surcharges are listed. LastNotifiedAt is
+// owned by the poller's cooldown claim and is not writable.
+type ExtendedSupportSettings struct {
+	Enabled        bool    `json:"enabled"`
+	LeadDays       int64   `json:"leadDays"`
+	LastNotifiedAt *string `json:"lastNotifiedAt"`
+}
+
+// IdleRuleOverride is what an organization changed about one metric-based
+// idle rule; absent fields keep the rule's declared default.
+type IdleRuleOverride struct {
+	Enabled    *bool              `json:"enabled,omitempty"`
+	Thresholds map[string]float64 `json:"thresholds,omitempty"`
+}
+
+// IdleFindingSettingsUpdate is the PUT body for the idle rules. Rules, when
+// sent, replaces the whole overrides map.
+type IdleFindingSettingsUpdate struct {
+	Enabled      *bool                       `json:"enabled,omitempty"`
+	LookbackDays *int64                      `json:"lookbackDays,omitempty"`
+	Rules        map[string]IdleRuleOverride `json:"rules"`
+}
+
+// IdleFindingSettings is the org singleton tuning the metric-based idle rules
+// behind Potential savings, keyed by `pluginId:ruleId`.
+type IdleFindingSettings struct {
+	Enabled      bool                        `json:"enabled"`
+	LookbackDays int64                       `json:"lookbackDays"`
+	Rules        map[string]IdleRuleOverride `json:"rules"`
+}
+
 // PostureAlertSettingsUpdate is the PUT body for posture-check notifications.
 type PostureAlertSettingsUpdate struct {
 	Enabled *bool `json:"enabled,omitempty"`
@@ -893,6 +1288,21 @@ type PostureAlertSettingsUpdate struct {
 // PostureAlertSettings is the org singleton for posture-check notifications.
 type PostureAlertSettings struct {
 	Enabled        bool    `json:"enabled"`
+	LastNotifiedAt *string `json:"lastNotifiedAt"`
+}
+
+// VulnerabilityAlertSettingsUpdate is the PUT body for vulnerability alerts.
+type VulnerabilityAlertSettingsUpdate struct {
+	AlertsEnabled *bool   `json:"alertsEnabled,omitempty"`
+	MinSeverity   *string `json:"minSeverity,omitempty"`
+	RunningOnly   *bool   `json:"runningOnly,omitempty"`
+}
+
+// VulnerabilityAlertSettings is the org singleton for vulnerability alerts.
+type VulnerabilityAlertSettings struct {
+	AlertsEnabled  bool    `json:"alertsEnabled"`
+	MinSeverity    string  `json:"minSeverity"`
+	RunningOnly    bool    `json:"runningOnly"`
 	LastNotifiedAt *string `json:"lastNotifiedAt"`
 }
 
@@ -930,10 +1340,25 @@ type SessionRecordingSettings struct {
 //
 // Both fields are required on PUT, so neither is a pointer. The route reads an
 // omitted InitialLookbackDays as "keep the stored one", but the provider always
-// sends both — a Terraform attribute with a value is a value.
+// sends both: a Terraform attribute with a value is a value.
 type NetworkFlowSettings struct {
 	Enabled             bool  `json:"enabled"`
 	InitialLookbackDays int64 `json:"initialLookbackDays"`
+}
+
+// KubernetesNetworkSettings is one Kubernetes account's network cost settings:
+// which billed cost rows are that cluster's data transfer, as cost query
+// language text. A nil BilledQuery means none is set.
+type KubernetesNetworkSettings struct {
+	AccountID   string  `json:"accountId"`
+	BilledQuery *string `json:"billedQuery"`
+	UpdatedAt   *string `json:"updatedAt"`
+}
+
+// KubernetesNetworkSettingsInput is the PUT body. BilledQuery is sent as null
+// (never omitted) to clear it: the route requires the field.
+type KubernetesNetworkSettingsInput struct {
+	BilledQuery *string `json:"billedQuery"`
 }
 
 /* ----------------------------- issue trackers ------------------------------ */
@@ -949,31 +1374,173 @@ type JiraIntegrationInput struct {
 	APIToken           *string `json:"apiToken,omitempty"`
 	DefaultProjectKey  *string `json:"defaultProjectKey"`
 	DefaultIssueTypeID *string `json:"defaultIssueTypeId"`
+	// AcknowledgeOnDone is a pointer with omitempty: nil (an older
+	// caller) keeps the stored value, which is what the route does too.
+	AcknowledgeOnDone *bool `json:"acknowledgeOnDone,omitempty"`
+}
+
+// IssueWebhookState is the live-status webhook on a Jira or Linear
+// connection. Decoded for completeness and never managed: setting one up can
+// show a one-time secret to paste into the tracker, which has no place in
+// Terraform state.
+type IssueWebhookState struct {
+	Mode           *string `json:"mode"`
+	URL            *string `json:"url"`
+	LastDeliveryAt *string `json:"lastDeliveryAt"`
 }
 
 // JiraIntegration is the stored connection. TokenHint is the redacted echo of
 // the API token; the token itself is never returned.
 type JiraIntegration struct {
-	SiteURL            string  `json:"siteUrl"`
-	AccountEmail       string  `json:"accountEmail"`
-	TokenHint          string  `json:"tokenHint"`
-	DefaultProjectKey  *string `json:"defaultProjectKey"`
-	DefaultIssueTypeID *string `json:"defaultIssueTypeId"`
-	UpdatedAt          string  `json:"updatedAt"`
+	SiteURL            string             `json:"siteUrl"`
+	AccountEmail       string             `json:"accountEmail"`
+	TokenHint          string             `json:"tokenHint"`
+	DefaultProjectKey  *string            `json:"defaultProjectKey"`
+	DefaultIssueTypeID *string            `json:"defaultIssueTypeId"`
+	AcknowledgeOnDone  bool               `json:"acknowledgeOnDone"`
+	Webhook            *IssueWebhookState `json:"webhook"`
+	UpdatedAt          string             `json:"updatedAt"`
 }
 
 // LinearIntegrationInput is the PUT body. Same write-only rule as Jira's token.
 type LinearIntegrationInput struct {
-	APIKey        *string `json:"apiKey,omitempty"`
-	DefaultTeamID *string `json:"defaultTeamId"`
+	APIKey            *string `json:"apiKey,omitempty"`
+	DefaultTeamID     *string `json:"defaultTeamId"`
+	AcknowledgeOnDone *bool   `json:"acknowledgeOnDone,omitempty"`
 }
 
 // LinearIntegration is the stored connection.
 type LinearIntegration struct {
-	KeyHint       string  `json:"keyHint"`
-	DefaultTeamID *string `json:"defaultTeamId"`
-	UpdatedAt     string  `json:"updatedAt"`
+	KeyHint           string             `json:"keyHint"`
+	DefaultTeamID     *string            `json:"defaultTeamId"`
+	AcknowledgeOnDone bool               `json:"acknowledgeOnDone"`
+	Webhook           *IssueWebhookState `json:"webhook"`
+	UpdatedAt         string             `json:"updatedAt"`
 }
+
+/* ------------------------------ GitHub issues ------------------------------ */
+
+// GithubRepoRef names a repository through the GitHub App installation that
+// can reach it. Both halves come from the `/github/repos` listing.
+type GithubRepoRef struct {
+	InstallationID int64  `json:"installationId"`
+	FullName       string `json:"fullName"`
+}
+
+// GithubIssueRouteMatch is a tagged union keyed on Kind, flattened the same
+// way AlertCondition is so Terraform can express it as plain attributes.
+type GithubIssueRouteMatch struct {
+	Kind         string  `json:"kind"`
+	CostCentreID *string `json:"costCentreId,omitempty"`
+	TagKey       *string `json:"tagKey,omitempty"`
+	// TagValue is nullable on the wire and means "any value of the key" when
+	// null, so the tag branch always emits it, explicitly null when unset.
+	TagValue *string `json:"tagValue,omitempty"`
+}
+
+// MarshalJSON emits only the keys belonging to the named branch: the server's
+// schema is a strict discriminated union, so a cost-centre match carrying a
+// stray tagKey is rejected.
+func (m GithubIssueRouteMatch) MarshalJSON() ([]byte, error) {
+	switch m.Kind {
+	case "cost_centre":
+		id := ""
+		if m.CostCentreID != nil {
+			id = *m.CostCentreID
+		}
+		return json.Marshal(struct {
+			Kind         string `json:"kind"`
+			CostCentreID string `json:"costCentreId"`
+		}{Kind: "cost_centre", CostCentreID: id})
+	case "tag":
+		key := ""
+		if m.TagKey != nil {
+			key = *m.TagKey
+		}
+		return json.Marshal(struct {
+			Kind     string  `json:"kind"`
+			TagKey   string  `json:"tagKey"`
+			TagValue *string `json:"tagValue"`
+		}{Kind: "tag", TagKey: key, TagValue: m.TagValue})
+	default:
+		return nil, fmt.Errorf("unknown GitHub issue route match kind %q (want \"cost_centre\" or \"tag\")", m.Kind)
+	}
+}
+
+// GithubIssueRoute is one entry of the ordered routing list. ID is optional on
+// input (the server mints one) and kept when supplied.
+type GithubIssueRoute struct {
+	ID        *string               `json:"id,omitempty"`
+	Match     GithubIssueRouteMatch `json:"match"`
+	Repo      GithubRepoRef         `json:"repo"`
+	Labels    []string              `json:"labels"`
+	Assignees []string              `json:"assignees"`
+}
+
+// GithubIacSource maps one IaC state scope to the repository holding its
+// Terraform, for pull requests. A null IacAccountID is the organization-wide
+// state; the server allows at most one source per scope.
+type GithubIacSource struct {
+	ID           *string       `json:"id,omitempty"`
+	IacAccountID *string       `json:"iacAccountId"`
+	Repo         GithubRepoRef `json:"repo"`
+	BaseBranch   *string       `json:"baseBranch"`
+	Directory    string        `json:"directory"`
+}
+
+// GithubIssueSettingsInput is the PUT body: a whole-document replace, because
+// route order is part of the meaning.
+type GithubIssueSettingsInput struct {
+	Enabled             bool               `json:"enabled"`
+	DefaultRepo         *GithubRepoRef     `json:"defaultRepo"`
+	Labels              []string           `json:"labels"`
+	Assignees           []string           `json:"assignees"`
+	Routes              []GithubIssueRoute `json:"routes"`
+	ResolveAction       string             `json:"resolveAction"`
+	PullRequestsEnabled bool               `json:"pullRequestsEnabled"`
+	IacSources          []GithubIacSource  `json:"iacSources"`
+	AcknowledgeOnDone   *bool              `json:"acknowledgeOnDone,omitempty"`
+}
+
+// GithubIssueSettings is the stored org singleton.
+type GithubIssueSettings struct {
+	Enabled             bool               `json:"enabled"`
+	DefaultRepo         *GithubRepoRef     `json:"defaultRepo"`
+	Labels              []string           `json:"labels"`
+	Assignees           []string           `json:"assignees"`
+	Routes              []GithubIssueRoute `json:"routes"`
+	ResolveAction       string             `json:"resolveAction"`
+	PullRequestsEnabled bool               `json:"pullRequestsEnabled"`
+	IacSources          []GithubIacSource  `json:"iacSources"`
+	AcknowledgeOnDone   bool               `json:"acknowledgeOnDone"`
+	UpdatedAt           *string            `json:"updatedAt"`
+}
+
+// GithubIssuesStatus is the GET envelope. Only Settings is configuration; what
+// each installation has accepted is GitHub-side state the provider cannot
+// change, so `installations` is not decoded.
+type GithubIssuesStatus struct {
+	AppConfigured bool                `json:"appConfigured"`
+	Settings      GithubIssueSettings `json:"settings"`
+}
+
+// DefaultGithubIssueSettings is the document an organization starts with,
+// which is what `terraform destroy` writes back: the route has no DELETE.
+func DefaultGithubIssueSettings() GithubIssueSettingsInput {
+	return GithubIssueSettingsInput{
+		Enabled:             false,
+		DefaultRepo:         nil,
+		Labels:              []string{"infrawrench"},
+		Assignees:           []string{},
+		Routes:              []GithubIssueRoute{},
+		ResolveAction:       "comment",
+		PullRequestsEnabled: false,
+		IacSources:          []GithubIacSource{},
+		AcknowledgeOnDone:   boolRef(false),
+	}
+}
+
+func boolRef(v bool) *bool { return &v }
 
 /* ---------------------------- workflow schedules --------------------------- */
 
@@ -986,7 +1553,7 @@ type WorkflowScheduleInput struct {
 
 // WorkflowSchedule is the cron attached to an existing workflow.
 //
-// The workflow itself is not managed by this provider — its definition lives in
+// The workflow itself is not managed by this provider: its definition lives in
 // the workflow editor or in a git-backed repository, neither of which this API
 // surface writes. Enabled mirrors the workflow's own flag.
 type WorkflowSchedule struct {
@@ -1002,7 +1569,7 @@ type WorkflowSchedule struct {
 
 // Resource is a synced cloud resource, as an account's listing returns it.
 //
-// The provider never writes these — ejecting them to HCL is what
+// The provider never writes these: ejecting them to HCL is what
 // `Plugin.terraformExport` is for, and creating them is the cloud's own
 // provider's job. Reading them matters because a probe, a sleep schedule and a
 // log query all address a resource by id, and hard-coding one in HCL is exactly
@@ -1030,4 +1597,623 @@ type OrgMember struct {
 	RoleName      *string `json:"roleName"`
 	RoleSystemKey *string `json:"roleSystemKey"`
 	CreatedAt     string  `json:"createdAt"`
+}
+
+/* ---------------------------- on-call rotations ---------------------------- */
+
+// OnCallParticipant is one person in the rotation order. Name and email are the
+// server's, resolved from the org's membership; the provider carries them so the
+// drift check sees the shape covered, and writes only the ids into state.
+type OnCallParticipant struct {
+	UserID string  `json:"userId"`
+	Name   *string `json:"name"`
+	Email  *string `json:"email"`
+}
+
+// OnCallSchedule is a rotation: an ordered list of people, a shift length, and
+// the instant the first shift began. Every later handover is derived from those
+// three, which is why StartDate re-anchors the whole rotation rather than
+// affecting only the next shift.
+type OnCallSchedule struct {
+	ID           string              `json:"id"`
+	Name         string              `json:"name"`
+	Timezone     string              `json:"timezone"`
+	RotationDays int64               `json:"rotationDays"`
+	HandoffTime  string              `json:"handoffTime"`
+	StartDate    string              `json:"startDate"`
+	Participants []OnCallParticipant `json:"participants"`
+	Enabled      bool                `json:"enabled"`
+	CreatedAt    string              `json:"createdAt"`
+	UpdatedAt    string              `json:"updatedAt"`
+}
+
+// OnCallScheduleCreate is the POST body. Enabled is a pointer because the server
+// defaults it to true, and a false the caller meant must survive the difference.
+type OnCallScheduleCreate struct {
+	Name               string   `json:"name"`
+	Timezone           string   `json:"timezone"`
+	RotationDays       int64    `json:"rotationDays"`
+	HandoffTime        string   `json:"handoffTime"`
+	StartDate          string   `json:"startDate"`
+	ParticipantUserIDs []string `json:"participantUserIds"`
+	Enabled            *bool    `json:"enabled,omitempty"`
+}
+
+// OnCallScheduleUpdate is the PATCH body: every field optional, absent meaning
+// unchanged.
+type OnCallScheduleUpdate struct {
+	Name               *string  `json:"name,omitempty"`
+	Timezone           *string  `json:"timezone,omitempty"`
+	RotationDays       *int64   `json:"rotationDays,omitempty"`
+	HandoffTime        *string  `json:"handoffTime,omitempty"`
+	StartDate          *string  `json:"startDate,omitempty"`
+	ParticipantUserIDs []string `json:"participantUserIds,omitempty"`
+	Enabled            *bool    `json:"enabled,omitempty"`
+}
+
+/* ---------------------------- cost visibility ----------------------------- */
+
+// CostVisibilityScope is one stored scope: which cost rows a role, member or
+// API key can see.
+type CostVisibilityScope struct {
+	ID             string   `json:"id"`
+	PrincipalKind  string   `json:"principalKind"`
+	PrincipalID    string   `json:"principalId"`
+	PrincipalLabel *string  `json:"principalLabel"`
+	CostCentreIDs  []string `json:"costCentreIds"`
+	AccountIDs     []string `json:"accountIds"`
+	SavedFilterID  *string  `json:"savedFilterId"`
+	CreatedAt      string   `json:"createdAt"`
+	UpdatedAt      string   `json:"updatedAt"`
+}
+
+// CostVisibilityScopeInput is the PUT body, an upsert keyed by principal.
+// SavedFilterID is always sent (null clears it), never omitted.
+type CostVisibilityScopeInput struct {
+	PrincipalKind string   `json:"principalKind"`
+	PrincipalID   string   `json:"principalId"`
+	CostCentreIDs []string `json:"costCentreIds"`
+	AccountIDs    []string `json:"accountIds"`
+	SavedFilterID *string  `json:"savedFilterId"`
+}
+
+/* ------------------------------ object sharing ----------------------------- */
+
+// ObjectAccessGrant is one member or role grant on a shareable object.
+type ObjectAccessGrant struct {
+	PrincipalKind  string  `json:"principalKind"`
+	PrincipalID    string  `json:"principalId"`
+	PrincipalLabel *string `json:"principalLabel"`
+	Level          string  `json:"level"`
+	// Implicit marks a report creator's ownership, which is derived rather
+	// than stored and is never sent back.
+	Implicit bool `json:"implicit"`
+}
+
+// ObjectSharing is the whole sharing document for one object.
+type ObjectSharing struct {
+	ObjectType    string                  `json:"objectType"`
+	ObjectID      string                  `json:"objectId"`
+	OrgAccess     string                  `json:"orgAccess"`
+	Grants        []ObjectAccessGrant     `json:"grants"`
+	CallerLevel   string                  `json:"callerLevel"`
+	InheritedFrom *ObjectSharingInherited `json:"inheritedFrom"`
+}
+
+// ObjectSharingInherited is access the containing folder already gives.
+type ObjectSharingInherited struct {
+	FolderID   string `json:"folderId"`
+	FolderName string `json:"folderName"`
+	Level      string `json:"level"`
+}
+
+// ObjectSharingGrantInput is one grant in the PUT body.
+type ObjectSharingGrantInput struct {
+	PrincipalKind string `json:"principalKind"`
+	PrincipalID   string `json:"principalId"`
+	Level         string `json:"level"`
+}
+
+// ObjectSharingInput replaces the whole document.
+type ObjectSharingInput struct {
+	OrgAccess string                    `json:"orgAccess"`
+	Grants    []ObjectSharingGrantInput `json:"grants"`
+}
+
+/* --------------------------- AI request attribution ------------------------ */
+
+// AIRequestSource is one request-log source that AI attribution reads daily: a
+// provider plugin's log location (Bedrock invocation logs, a Cloudflare AI
+// Gateway, JSONL in S3) or a LiteLLM proxy the host reads itself.
+//
+// The API key of a LiteLLM source is write-only; HasAPIKey is the only trace
+// of it any route returns.
+type AIRequestSource struct {
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Kind             string            `json:"kind"`
+	PluginID         *string           `json:"pluginId"`
+	AccountID        *string           `json:"accountId"`
+	AccountName      *string           `json:"accountName"`
+	SourceKindID     string            `json:"sourceKindId"`
+	Location         map[string]string `json:"location"`
+	Enabled          bool              `json:"enabled"`
+	LookbackDays     int64             `json:"lookbackDays"`
+	BaseURL          *string           `json:"baseUrl"`
+	HasAPIKey        bool              `json:"hasApiKey"`
+	CollectedThrough *string           `json:"collectedThrough"`
+	LastRunAt        *string           `json:"lastRunAt"`
+	NextRunAt        *string           `json:"nextRunAt"`
+	LastError        *string           `json:"lastError"`
+	LastErrorHelpURL *string           `json:"lastErrorHelpUrl"`
+	FailureCount     int64             `json:"failureCount"`
+	CreatedAt        string            `json:"createdAt"`
+	UpdatedAt        string            `json:"updatedAt"`
+}
+
+// AIRequestSourceInput is the POST body and the PUT full replacement.
+//
+// AccountID and BaseURL marshal an explicit null rather than being omitted:
+// the PUT replaces the whole source, and the server reads each as "not set".
+// APIKey is the opposite: omitting it on a PUT keeps the stored key, which is
+// what a configuration that leaves `api_key` unset after the first apply wants.
+type AIRequestSourceInput struct {
+	Name         string            `json:"name"`
+	Kind         string            `json:"kind"`
+	AccountID    *string           `json:"accountId"`
+	SourceKindID string            `json:"sourceKindId"`
+	Location     map[string]string `json:"location"`
+	Enabled      bool              `json:"enabled"`
+	LookbackDays int64             `json:"lookbackDays"`
+	BaseURL      *string           `json:"baseUrl"`
+	APIKey       *string           `json:"apiKey,omitempty"`
+}
+
+// AIRequestSourceKindOption is one kind of source the organization can add.
+// The provider reads it for one fact only: MaxHistoryDays, the cap the server
+// clamps a source's lookback to.
+type AIRequestSourceKindOption struct {
+	Kind           string  `json:"kind"`
+	PluginID       *string `json:"pluginId"`
+	SourceKindID   string  `json:"sourceKindId"`
+	MaxHistoryDays int64   `json:"maxHistoryDays"`
+}
+
+// AIAttributionDimension maps request-metadata keys onto a caller dimension,
+// which cost reports surface as the tag key `caller:<key>`.
+type AIAttributionDimension struct {
+	ID           string   `json:"id"`
+	Key          string   `json:"key"`
+	Label        string   `json:"label"`
+	MetadataKeys []string `json:"metadataKeys"`
+	CreatedAt    string   `json:"createdAt"`
+	UpdatedAt    string   `json:"updatedAt"`
+}
+
+// AIAttributionDimensionInput is the POST body and the PUT full replacement.
+type AIAttributionDimensionInput struct {
+	Key          string   `json:"key"`
+	Label        string   `json:"label"`
+	MetadataKeys []string `json:"metadataKeys"`
+}
+
+// RealizedSavingsSettings is the org singleton that tunes how realized savings
+// are measured: what optimization actions actually saved against the spend
+// before them. The same shape is read and written, and every field is
+// required on PUT.
+type RealizedSavingsSettings struct {
+	HorizonMonths             int64 `json:"horizonMonths"`
+	ShortfallThresholdPercent int64 `json:"shortfallThresholdPercent"`
+	BaselineWindowDays        int64 `json:"baselineWindowDays"`
+}
+
+// SeatSettings is the org singleton that sets how long a paid SaaS seat may
+// go unused before the Seats findings flag it. The same shape is read and
+// written.
+type SeatSettings struct {
+	InactiveDays int64 `json:"inactiveDays"`
+}
+
+// deref reads an optional string, empty when absent. Used by the tagged-union
+// marshallers so a missing id serialises as "" and the server's validation
+// names the missing field, rather than the key vanishing from the body.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+/* ---------------------------- paging providers ---------------------------- */
+
+// PagingProviderSettings is the per-account inbound configuration of a
+// paging provider (PagerDuty, incident.io). The signing secret is write-only
+// and never comes back; WebhookConfigured says whether one is stored.
+type PagingProviderSettings struct {
+	InboundEnabled    bool    `json:"inboundEnabled"`
+	WebhookConfigured bool    `json:"webhookConfigured"`
+	WebhookURL        *string `json:"webhookUrl"`
+	LastSyncedAt      *string `json:"lastSyncedAt"`
+	LastSyncError     *string `json:"lastSyncError"`
+}
+
+// PagingProviderAccount is one connected account whose plugin can page.
+type PagingProviderAccount struct {
+	AccountID                string                 `json:"accountId"`
+	DisplayName              string                 `json:"displayName"`
+	PluginID                 string                 `json:"pluginId"`
+	TargetLabel              string                 `json:"targetLabel"`
+	TargetDescription        *string                `json:"targetDescription"`
+	SupportsAcknowledgeEvent bool                   `json:"supportsAcknowledgeEvent"`
+	OnCallSourceLabel        *string                `json:"onCallSourceLabel"`
+	WebhookMode              *string                `json:"webhookMode"`
+	WebhookSetupHelp         *string                `json:"webhookSetupHelp"`
+	Settings                 PagingProviderSettings `json:"settings"`
+}
+
+// PagingProviderSettingsInput is the PUT body. WebhookSecret is a pointer to
+// a pointer in spirit: nil omits the key (keep the stored secret), and an
+// explicit empty string clears it, which the server reads like null.
+type PagingProviderSettingsInput struct {
+	InboundEnabled bool    `json:"inboundEnabled"`
+	WebhookSecret  *string `json:"webhookSecret,omitempty"`
+}
+
+/* ------------------------- just-in-time access ---------------------------- */
+
+// JitPolicyTarget is one scope and role pair a policy lets members request:
+// an AWS account and a permission set, a GCP project and an IAM role, a
+// Kubernetes namespace and a ClusterRole. The names are display snapshots; the
+// server falls back to the id when a name is empty.
+type JitPolicyTarget struct {
+	ScopeID   string `json:"scopeId"`
+	ScopeName string `json:"scopeName"`
+	RoleID    string `json:"roleId"`
+	RoleName  string `json:"roleName"`
+}
+
+// JitPolicy is a just-in-time access policy as the API returns it. Labels and
+// CanRequest are caller-relative presentation (what the plugin calls a scope,
+// whether the key's owner may ask); no attribute derives from them, but they
+// are decoded so the spec check sees every property accounted for.
+type JitPolicy struct {
+	ID                              string            `json:"id"`
+	Name                            string            `json:"name"`
+	Description                     *string           `json:"description"`
+	Enabled                         bool              `json:"enabled"`
+	AccountID                       string            `json:"accountId"`
+	AccountName                     *string           `json:"accountName"`
+	PluginID                        string            `json:"pluginId"`
+	Targets                         []JitPolicyTarget `json:"targets"`
+	MaxDurationMinutes              int64             `json:"maxDurationMinutes"`
+	DefaultDurationMinutes          int64             `json:"defaultDurationMinutes"`
+	RequestTimeoutMinutes           int64             `json:"requestTimeoutMinutes"`
+	RequesterUserIDs                []string          `json:"requesterUserIds"`
+	RequesterRoleIDs                []string          `json:"requesterRoleIds"`
+	ApproverUserIDs                 []string          `json:"approverUserIds"`
+	ApproverRoleIDs                 []string          `json:"approverRoleIds"`
+	ApproverOnCallScheduleIDs       []string          `json:"approverOnCallScheduleIds"`
+	AllowSelfApprovalDuringIncident bool              `json:"allowSelfApprovalDuringIncident"`
+	RequireReason                   bool              `json:"requireReason"`
+	RequireTicket                   bool              `json:"requireTicket"`
+	CreatedAt                       string            `json:"createdAt"`
+	UpdatedAt                       string            `json:"updatedAt"`
+	Labels                          json.RawMessage   `json:"labels,omitempty"`
+	CanRequest                      *bool             `json:"canRequest,omitempty"`
+}
+
+// JitPolicyInput is the POST and PUT body; PUT replaces the whole policy, so
+// every field is sent on both. Lists are always sent (empty, never omitted),
+// because an omitted list on a PUT would read as "everyone may request".
+type JitPolicyInput struct {
+	Name                            string            `json:"name"`
+	Description                     *string           `json:"description"`
+	Enabled                         bool              `json:"enabled"`
+	AccountID                       string            `json:"accountId"`
+	Targets                         []JitPolicyTarget `json:"targets"`
+	MaxDurationMinutes              int64             `json:"maxDurationMinutes"`
+	DefaultDurationMinutes          *int64            `json:"defaultDurationMinutes,omitempty"`
+	RequestTimeoutMinutes           int64             `json:"requestTimeoutMinutes"`
+	RequesterUserIDs                []string          `json:"requesterUserIds"`
+	RequesterRoleIDs                []string          `json:"requesterRoleIds"`
+	ApproverUserIDs                 []string          `json:"approverUserIds"`
+	ApproverRoleIDs                 []string          `json:"approverRoleIds"`
+	ApproverOnCallScheduleIDs       []string          `json:"approverOnCallScheduleIds"`
+	AllowSelfApprovalDuringIncident bool              `json:"allowSelfApprovalDuringIncident"`
+	RequireReason                   bool              `json:"requireReason"`
+	RequireTicket                   bool              `json:"requireTicket"`
+}
+
+/* --------------------------- pull request checks --------------------------- */
+
+// PrCheckRepositoryInput is the POST/PUT body for one repository's pull
+// request checks. A PUT replaces every field; CostThreshold has no omitempty
+// because an explicit null is how "no threshold" is said.
+type PrCheckRepositoryInput struct {
+	InstallationID      int64    `json:"installationId"`
+	Repo                string   `json:"repo"`
+	Enabled             bool     `json:"enabled"`
+	CommentEnabled      bool     `json:"commentEnabled"`
+	CostThreshold       *float64 `json:"costThreshold"`
+	ThresholdConclusion string   `json:"thresholdConclusion"`
+	Directories         []string `json:"directories"`
+}
+
+// PrCheckRepository is one repository with pull request checks configured.
+type PrCheckRepository struct {
+	ID                  string   `json:"id"`
+	InstallationID      int64    `json:"installationId"`
+	Repo                string   `json:"repo"`
+	Enabled             bool     `json:"enabled"`
+	CommentEnabled      bool     `json:"commentEnabled"`
+	CostThreshold       *float64 `json:"costThreshold"`
+	ThresholdConclusion string   `json:"thresholdConclusion"`
+	Directories         []string `json:"directories"`
+	CreatedAt           string   `json:"createdAt"`
+	UpdatedAt           string   `json:"updatedAt"`
+}
+
+/* -------------------------------- services -------------------------------- */
+
+// ServiceLink is one dashboard, repository or document a service points at.
+type ServiceLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// ServiceMembershipRule is one rule that pulls resources into a service. Every
+// field but Kind marshals nil as an explicit null, which is the stored shape:
+// the server normalises a rule to all six keys either way.
+type ServiceMembershipRule struct {
+	Kind      string  `json:"kind"`
+	Key       *string `json:"key"`
+	Value     *string `json:"value"`
+	NameMatch *string `json:"nameMatch"`
+	PluginID  *string `json:"pluginId"`
+	AccountID *string `json:"accountId"`
+}
+
+// ServiceInput is the POST and PATCH body. The PATCH leaves an omitted key
+// alone and replaces a list that is present, so the provider always sends the
+// whole object: every list goes as `[]` rather than being omitted, and the
+// nullable scalars marshal nil as an explicit null ("clear it").
+//
+// Slug is the one exception: omitted on create, the server derives it from the
+// name, which is why it carries omitempty.
+type ServiceInput struct {
+	Name             string                  `json:"name"`
+	Slug             *string                 `json:"slug,omitempty"`
+	Description      *string                 `json:"description"`
+	Tier             *int64                  `json:"tier"`
+	OwnerTeam        *string                 `json:"ownerTeam"`
+	OwnerUserIDs     []string                `json:"ownerUserIds"`
+	Links            []ServiceLink           `json:"links"`
+	OnCallScheduleID *string                 `json:"onCallScheduleId"`
+	SloIDs           []string                `json:"sloIds"`
+	RunbookIDs       []string                `json:"runbookIds"`
+	Rules            []ServiceMembershipRule `json:"rules"`
+	MonthlyBudget    *float64                `json:"monthlyBudget"`
+	BudgetCurrency   *string                 `json:"budgetCurrency"`
+}
+
+// ServiceOwner is an owning member with the name and address the server
+// resolved for them.
+type ServiceOwner struct {
+	UserID string  `json:"userId"`
+	Name   *string `json:"name"`
+	Email  *string `json:"email"`
+}
+
+// Service is a logical grouping of resources across providers. MemberCount
+// is resolved from rules against the current inventory, so it changes without
+// the service changing; the resource leaves it out of state and only the data
+// source exposes it.
+type Service struct {
+	ID                 string                  `json:"id"`
+	Name               string                  `json:"name"`
+	Slug               string                  `json:"slug"`
+	Description        *string                 `json:"description"`
+	Tier               *int64                  `json:"tier"`
+	OwnerTeam          *string                 `json:"ownerTeam"`
+	OwnerUserIDs       []string                `json:"ownerUserIds"`
+	Links              []ServiceLink           `json:"links"`
+	OnCallScheduleID   *string                 `json:"onCallScheduleId"`
+	SloIDs             []string                `json:"sloIds"`
+	RunbookIDs         []string                `json:"runbookIds"`
+	Rules              []ServiceMembershipRule `json:"rules"`
+	MonthlyBudget      *float64                `json:"monthlyBudget"`
+	BudgetCurrency     *string                 `json:"budgetCurrency"`
+	Owners             []ServiceOwner          `json:"owners"`
+	OnCallScheduleName *string                 `json:"onCallScheduleName"`
+	MemberCount        int64                   `json:"memberCount"`
+	CreatedAt          string                  `json:"createdAt"`
+	UpdatedAt          string                  `json:"updatedAt"`
+}
+
+// ServiceDetail is the single-GET envelope. Members and exclusions are the
+// resolved membership, which neither the resource nor the data source keeps.
+type ServiceDetail struct {
+	Service Service `json:"service"`
+}
+
+/* ------------------------------- scorecards ------------------------------- */
+
+// ScorecardCheckParams is the type-specific parameter object, typed rather
+// than an open map so each parameter can be its own Terraform attribute. On
+// the wire it is `Record<string, number | string[]>`; every key is omitted
+// when nil, and the server fills an omitted key with the check type's
+// default. The two lists are pointers so an explicit `[]` still goes out:
+// for `severities` an empty list and the default are different things.
+type ScorecardCheckParams struct {
+	MinBudgetRemainingPercent *float64  `json:"minBudgetRemainingPercent,omitempty"`
+	DrillWithinDays           *float64  `json:"drillWithinDays,omitempty"`
+	Severities                *[]string `json:"severities,omitempty"`
+	Tags                      *[]string `json:"tags,omitempty"`
+	MaxFailureRatePercent     *float64  `json:"maxFailureRatePercent,omitempty"`
+	WindowDays                *float64  `json:"windowDays,omitempty"`
+}
+
+// ScorecardCheck is one weighted check.
+type ScorecardCheck struct {
+	ID     string               `json:"id"`
+	Type   string               `json:"type"`
+	Name   *string              `json:"name"`
+	Weight int64                `json:"weight"`
+	Params ScorecardCheckParams `json:"params"`
+}
+
+// ScorecardLevel is one rung of the ladder. The server stores levels sorted
+// by MinScore, lowest first.
+type ScorecardLevel struct {
+	Key      string  `json:"key"`
+	Name     string  `json:"name"`
+	MinScore float64 `json:"minScore"`
+	Color    *string `json:"color"`
+}
+
+// ScorecardInput is the POST and PATCH body; the provider sends every key on
+// both, so the PATCH's "omitted means unchanged" never applies.
+type ScorecardInput struct {
+	Name             string           `json:"name"`
+	Description      *string          `json:"description"`
+	Checks           []ScorecardCheck `json:"checks"`
+	Levels           []ScorecardLevel `json:"levels"`
+	ApplicableTiers  []int64          `json:"applicableTiers"`
+	AlertOnLevelDrop bool             `json:"alertOnLevelDrop"`
+	Enabled          bool             `json:"enabled"`
+}
+
+// Scorecard is a weighted list of checks plus a ladder of levels that every
+// applicable service is scored against. LastEvaluatedAt moves every hourly
+// pass and is decoded for completeness only.
+type Scorecard struct {
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	Description      *string          `json:"description"`
+	Checks           []ScorecardCheck `json:"checks"`
+	Levels           []ScorecardLevel `json:"levels"`
+	ApplicableTiers  []int64          `json:"applicableTiers"`
+	AlertOnLevelDrop bool             `json:"alertOnLevelDrop"`
+	Enabled          bool             `json:"enabled"`
+	IsDefault        bool             `json:"isDefault"`
+	LastEvaluatedAt  *string          `json:"lastEvaluatedAt"`
+	CreatedAt        string           `json:"createdAt"`
+	UpdatedAt        string           `json:"updatedAt"`
+}
+
+/* --------------------------- event subscriptions --------------------------- */
+
+// EventDestination is the tagged union the API calls EventDestination: kind
+// "webhook" carries URL, kind "publish" the three picker ids.
+type EventDestination struct {
+	Kind           string `json:"kind"`
+	URL            string `json:"url,omitempty"`
+	AccountID      string `json:"accountId,omitempty"`
+	ResourceTypeID string `json:"resourceTypeId,omitempty"`
+	ResourceID     string `json:"resourceId,omitempty"`
+}
+
+// EventSubscriptionInput is the POST and PUT body (PUT is whole-object).
+type EventSubscriptionInput struct {
+	Name         string           `json:"name"`
+	Enabled      bool             `json:"enabled"`
+	Destination  EventDestination `json:"destination"`
+	EventTypes   []string         `json:"eventTypes"`
+	MinSeverity  *string          `json:"minSeverity"`
+	AccountIDs   []string         `json:"accountIds"`
+	Environments []string         `json:"environments"`
+}
+
+// EventSubscription is the read shape. The signing secret is never in it.
+type EventSubscription struct {
+	ID                      string           `json:"id"`
+	Name                    string           `json:"name"`
+	Enabled                 bool             `json:"enabled"`
+	Destination             EventDestination `json:"destination"`
+	DestinationLabel        string           `json:"destinationLabel"`
+	EventTypes              []string         `json:"eventTypes"`
+	MinSeverity             *string          `json:"minSeverity"`
+	AccountIDs              []string         `json:"accountIds"`
+	Environments            []string         `json:"environments"`
+	SecretHint              *string          `json:"secretHint"`
+	PreviousSecretExpiresAt *string          `json:"previousSecretExpiresAt"`
+	DisabledReason          *string          `json:"disabledReason"`
+	DisabledAt              *string          `json:"disabledAt"`
+	ConsecutiveFailures     int64            `json:"consecutiveFailures"`
+	FailingSince            *string          `json:"failingSince"`
+	LastSuccessAt           *string          `json:"lastSuccessAt"`
+	LastFailureAt           *string          `json:"lastFailureAt"`
+	CreatedAt               string           `json:"createdAt"`
+	UpdatedAt               string           `json:"updatedAt"`
+}
+
+// EventSubscriptionWithSecret is what create and reroll return: the only two
+// responses that carry the secret.
+type EventSubscriptionWithSecret struct {
+	Subscription EventSubscription `json:"subscription"`
+	Secret       *string           `json:"secret"`
+}
+
+/* -------------------------------- compliance ------------------------------- */
+
+// ComplianceControlSettingInput is the PUT body for the organization's
+// decision about one framework control. A PUT replaces every field, so the
+// optional strings carry no omitempty: an explicit null is how a cleared
+// justification, owner or note is said.
+type ComplianceControlSettingInput struct {
+	Applicable    bool    `json:"applicable"`
+	Justification *string `json:"justification"`
+	OwnerUserID   *string `json:"ownerUserId"`
+	OwnerLabel    *string `json:"ownerLabel"`
+	Notes         *string `json:"notes"`
+}
+
+// ComplianceControlSetting is the stored decision about one control. The
+// server trims every string and stores an empty one as null.
+type ComplianceControlSetting struct {
+	FrameworkID     string  `json:"frameworkId"`
+	ControlID       string  `json:"controlId"`
+	Applicable      bool    `json:"applicable"`
+	Justification   *string `json:"justification"`
+	OwnerUserID     *string `json:"ownerUserId"`
+	OwnerLabel      *string `json:"ownerLabel"`
+	Notes           *string `json:"notes"`
+	UpdatedByUserID *string `json:"updatedByUserId"`
+	UpdatedAt       string  `json:"updatedAt"`
+}
+
+// CompliancePackScheduleInput is the POST/PUT body for a scheduled evidence
+// pack. A PUT is a full replace, and may move the schedule to another
+// framework.
+type CompliancePackScheduleInput struct {
+	FrameworkID     string   `json:"frameworkId"`
+	Cadence         string   `json:"cadence"`
+	SendDayOfMonth  *int64   `json:"sendDayOfMonth,omitempty"`
+	Hour            int64    `json:"hour"`
+	Timezone        string   `json:"timezone"`
+	EmailRecipients []string `json:"emailRecipients"`
+	SlackChannelIDs []string `json:"slackChannelIds"`
+	TeamsWebhookIDs []string `json:"teamsWebhookIds"`
+	Enabled         bool     `json:"enabled"`
+}
+
+// CompliancePackSchedule is a stored evidence-pack delivery schedule.
+type CompliancePackSchedule struct {
+	ID              string   `json:"id"`
+	FrameworkID     string   `json:"frameworkId"`
+	Cadence         string   `json:"cadence"`
+	SendDayOfMonth  int64    `json:"sendDayOfMonth"`
+	Hour            int64    `json:"hour"`
+	Timezone        string   `json:"timezone"`
+	SlackChannelIDs []string `json:"slackChannelIds"`
+	TeamsWebhookIDs []string `json:"teamsWebhookIds"`
+	EmailRecipients []string `json:"emailRecipients"`
+	Enabled         bool     `json:"enabled"`
+	NextSendAt      *string  `json:"nextSendAt"`
+	LastSentAt      *string  `json:"lastSentAt"`
+	LastStatus      *string  `json:"lastStatus"`
+	LastError       *string  `json:"lastError"`
+	CreatedByUserID *string  `json:"createdByUserId"`
+	CreatedAt       string   `json:"createdAt"`
+	UpdatedAt       string   `json:"updatedAt"`
 }

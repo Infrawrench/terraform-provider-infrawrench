@@ -35,14 +35,19 @@ type allocationRuleMatchModel struct {
 	AccountID types.String `tfsdk:"account_id"`
 	PluginID  types.String `tfsdk:"plugin_id"`
 	Service   types.String `tfsdk:"service"`
+	// Virtual tags are matched by key, like provider tags.
+	VirtualTagKey   types.String `tfsdk:"virtual_tag_key"`
+	VirtualTagValue types.String `tfsdk:"virtual_tag_value"`
 }
 
 var allocationRuleMatchAttrTypes = map[string]attr.Type{
-	"tag_key":    types.StringType,
-	"tag_value":  types.StringType,
-	"account_id": types.StringType,
-	"plugin_id":  types.StringType,
-	"service":    types.StringType,
+	"tag_key":           types.StringType,
+	"tag_value":         types.StringType,
+	"account_id":        types.StringType,
+	"plugin_id":         types.StringType,
+	"service":           types.StringType,
+	"virtual_tag_key":   types.StringType,
+	"virtual_tag_value": types.StringType,
 }
 
 type allocationRuleResourceModel struct {
@@ -110,6 +115,23 @@ func (r *allocationRuleResource) Schema(_ context.Context, _ resource.SchemaRequ
 					"service": schema.StringAttribute{
 						Optional:            true,
 						MarkdownDescription: "Match one provider service name, as it appears in the cost data.",
+					},
+					"virtual_tag_key": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "Match rows where one of the organization's virtual tags is set, by its " +
+							"key (1-64 characters; see `infrawrench_virtual_tag`). Pair it with " +
+							"`virtual_tag_value` to pin the value. A virtual tag that splits a row routes " +
+							"each share separately, so one shared row can feed several cost centres.",
+						Validators: []validator.String{stringvalidator.LengthBetween(1, 64)},
+					},
+					"virtual_tag_value": schema.StringAttribute{
+						Optional: true,
+						MarkdownDescription: "Value the `virtual_tag_key` virtual tag must hold, up to 256 characters. " +
+							"Requires `virtual_tag_key`.",
+						Validators: []validator.String{
+							stringvalidator.LengthAtMost(256),
+							stringvalidator.AlsoRequires(path.MatchRelative().AtParent().AtName("virtual_tag_key")),
+						},
 					},
 				},
 			},
@@ -266,6 +288,9 @@ func allocationRuleInputFrom(ctx context.Context, model allocationRuleResourceMo
 			AccountID: stringPtr(block.AccountID),
 			PluginID:  stringPtr(block.PluginID),
 			Service:   stringPtr(block.Service),
+
+			VirtualTagKey:   stringPtr(block.VirtualTagKey),
+			VirtualTagValue: stringPtr(block.VirtualTagValue),
 		}
 	}
 
@@ -279,7 +304,7 @@ func allocationRuleInputFrom(ctx context.Context, model allocationRuleResourceMo
 // allocationRuleStateFrom maps a server rule into Terraform state.
 //
 // The `match` block is a SingleNestedBlock, so an omitted block plans as a null
-// object rather than as an object full of nulls — and the two are different
+// object rather than as an object full of nulls, and the two are different
 // values as far as Terraform's "inconsistent result after apply" check is
 // concerned, even though they mean the same thing to the API. When the server
 // echoes an entirely empty match we therefore keep whichever shape `prior` had,
@@ -295,6 +320,9 @@ func allocationRuleStateFrom(ctx context.Context, remote *iw.AllocationRule, pri
 			AccountID: stringValue(remote.Match.AccountID),
 			PluginID:  stringValue(remote.Match.PluginID),
 			Service:   stringValue(remote.Match.Service),
+
+			VirtualTagKey:   stringValue(remote.Match.VirtualTagKey),
+			VirtualTagValue: stringValue(remote.Match.VirtualTagValue),
 		})
 		diags.Append(d...)
 		if diags.HasError() {
