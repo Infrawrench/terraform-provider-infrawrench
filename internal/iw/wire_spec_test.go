@@ -332,9 +332,6 @@ func specChecks() []specCheck {
 		{schema: "BillingProfileBank", value: BillingProfileBank{}},
 		{schema: "BillingProfileTaxRate", value: BillingProfileTaxRate{}},
 
-		{schema: "DeployTrigger", value: DeployTrigger{}},
-		{schema: "DeployTriggerInput", value: DeployTriggerInput{}},
-
 		{schema: "SlackStatus", value: SlackStatus{}},
 		{schema: "SlackInstallation", value: SlackInstallation{}},
 		{schema: "SlackChannel", value: SlackChannel{}},
@@ -412,6 +409,7 @@ func specChecks() []specCheck {
 		{schema: "SessionRecordingUsage", value: SessionRecordingUsage{}},
 
 		{schema: "NetworkFlowSettings", value: NetworkFlowSettings{}},
+		{schema: "NetworkFlowSettingsInput", value: NetworkFlowSettingsInput{}},
 		{schema: "KubernetesNetworkSettings", value: KubernetesNetworkSettings{}},
 		{schema: "NetworkFlowReport", value: NetworkFlowReport{}},
 		{schema: "NetworkFlowReportInput", value: NetworkFlowReportInput{}},
@@ -482,8 +480,13 @@ func specChecks() []specCheck {
 			// describe a UI form. None of it belongs in Terraform state, so the
 			// plugins data source drops all three rather than bloating every
 			// state file that reads it. oauth describes the "Connect with X"
-			// button, a browser consent flow Terraform cannot drive.
-			ignored: []string{"logoSvg", "credentialFields", "preflight", "oauth"},
+			// button, a browser consent flow Terraform cannot drive. sshTunnel,
+			// jumpHost and kvBrowser tell the app's connect dialogs what to offer,
+			// which is no more use in state than the form fields.
+			ignored: []string{
+				"logoSvg", "credentialFields", "preflight", "oauth",
+				"sshTunnel", "jumpHost", "kvBrowser",
+			},
 		},
 	}
 }
@@ -494,8 +497,9 @@ func specChecks() []specCheck {
 // listed here so the gap is visible rather than merely absent, and so that
 // regenerating the spec makes this test start covering them.
 //
-// It is empty as of the 1.76.0 regeneration, which brought the paging-provider
-// schemas into the document. Keeping the list and its test rather than
+// It was emptied by the 1.76.0 regeneration, which brought the paging-provider
+// schemas into the document, and again by 1.99.0, which brought in
+// NetworkFlowSettingsInput. Keeping the list and its test rather than
 // deleting them is deliberate: the next object added ahead of a spec refresh
 // goes here, and the test then says out loud when the refresh catches up.
 var schemasKnownAbsent = []string{}

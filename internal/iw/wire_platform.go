@@ -568,11 +568,16 @@ type SSHSnippet struct {
 
 // CreateAccountRequest is the POST body. Credentials are write-only: no route
 // returns them, so the provider cannot detect drift on their values.
+//
+// Products is the apps the connection is for, as product ids. Omitted (nil)
+// means every app the plugin offers; the server rejects an empty list, so
+// omitempty dropping one is not a loss.
 type CreateAccountRequest struct {
 	PluginID    string            `json:"pluginId"`
 	DisplayName string            `json:"displayName"`
 	Credentials map[string]string `json:"credentials"`
 	BastionID   *string           `json:"bastionId,omitempty"`
+	Products    []string          `json:"products,omitempty"`
 }
 
 // CreatedAccount is the POST response. SyncError is advisory: the account was
@@ -591,9 +596,14 @@ type CreatedAccount struct {
 // server reads an absent key as "leave the binding alone" and an explicit null
 // as "unbind". Terraform always sends the whole configuration, so a null
 // attribute has to reach the server as a null.
+//
+// Products is tri-state the same way: absent leaves the choice alone, null
+// means every app, a list narrows it. A nil slice marshals as null, which is
+// what a null attribute means.
 type UpdateAccountRequest struct {
-	DisplayName *string `json:"displayName,omitempty"`
-	BastionID   *string `json:"bastionId"`
+	DisplayName *string  `json:"displayName,omitempty"`
+	BastionID   *string  `json:"bastionId"`
+	Products    []string `json:"products"`
 }
 
 // AccountCredentialsInput is the PUT body for rotating stored credentials.
@@ -750,34 +760,6 @@ type BillingProfile struct {
 	CreatedByUserID    *string                 `json:"createdByUserId"`
 	CreatedAt          string                  `json:"createdAt"`
 	UpdatedAt          string                  `json:"updatedAt"`
-}
-
-/* ----------------------------- deploy triggers ----------------------------- */
-
-// DeployTriggerInput is the POST body. Answers are the deploy questionnaire's
-// stored responses, keyed by question id.
-type DeployTriggerInput struct {
-	Repo    string            `json:"repo"`
-	Branch  string            `json:"branch"`
-	Env     string            `json:"env"`
-	Answers map[string]string `json:"answers,omitempty"`
-}
-
-// DeployTrigger redeploys a repo when its branch moves. The only mutable field
-// is Enabled: repo, branch and env are fixed at creation.
-type DeployTrigger struct {
-	ID        string  `json:"id"`
-	Repo      string  `json:"repo"`
-	Branch    string  `json:"branch"`
-	Env       string  `json:"env"`
-	Enabled   bool    `json:"enabled"`
-	LastSha   *string `json:"lastSha"`
-	LastRunAt *string `json:"lastRunAt"`
-}
-
-// DeployTriggerEnabled is the PATCH body: the whole mutable surface.
-type DeployTriggerEnabled struct {
-	Enabled bool `json:"enabled"`
 }
 
 /* ------------------------------ slack / teams ------------------------------ */
@@ -1336,14 +1318,19 @@ type SessionRecordingSettings struct {
 /* ------------------------------ network flows ------------------------------ */
 
 // NetworkFlowSettings is the org singleton authorising priced source→
-// destination flow collection.
-//
-// Both fields are required on PUT, so neither is a pointer. The route reads an
-// omitted InitialLookbackDays as "keep the stored one", but the provider always
-// sends both: a Terraform attribute with a value is a value.
+// destination flow collection, as the server answers it: both fields always.
 type NetworkFlowSettings struct {
 	Enabled             bool  `json:"enabled"`
 	InitialLookbackDays int64 `json:"initialLookbackDays"`
+}
+
+// NetworkFlowSettingsInput is the PUT body. A nil InitialLookbackDays is left
+// out, which the route reads as "keep the stored one", so an omitted Terraform
+// attribute and turning collection off both leave the lookback alone without
+// reading it first.
+type NetworkFlowSettingsInput struct {
+	Enabled             bool   `json:"enabled"`
+	InitialLookbackDays *int64 `json:"initialLookbackDays,omitempty"`
 }
 
 // KubernetesNetworkSettings is one Kubernetes account's network cost settings:
